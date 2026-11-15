@@ -4,7 +4,7 @@
 
 Independent persistent-memory plugin derived from AskTheWay/dsh-auto-memory v1.3.0. Package: `dsh-auto-memory-wh`. Original attribution remains in [LICENSE](LICENSE), [UPSTREAM.md](UPSTREAM.md), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and the upstream archive.
 
-Stable release: **1.0.0**. Test evidence and package hashes belong to the [release report](docs/attachments/release.md).
+Stable release: **1.0.1**. Test evidence and package hashes belong to the [release report](docs/attachments/release.md).
 
 Memories are local Markdown files. Bounded titles and summaries enter the prompt; bodies are read on demand. Since rc.10, records do not require manual approval: disputed, superseded, disabled and expired records are excluded. Topic grouping, reversible lexical merging, relationship views and JSON import/export are available. New reminders live in the host scheduler, not the memory store; optional whale notifications depend on an external integration.
 
@@ -13,7 +13,7 @@ Requires DSH `>=0.2.1-rc.5 <1.0.0`, Node `^22.19.0 || >=24.0.0`, and the host pe
 Install the exact release using the Desktop embedded CLI and a fresh test profile:
 
 ```powershell
-& 'C:\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd' plugin --profile wh-trial add 'dsh-auto-memory-wh@1.0.0' --ignore-scripts
+& 'C:\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd' plugin --profile wh-trial add 'dsh-auto-memory-wh@1.0.1' --ignore-scripts
 ```
 
 Back up the profile manifest and memory-wh before a real upgrade. Restart DSH after installation. The plugin requires access to its profile and storage directories; administrator execution is not a general requirement.

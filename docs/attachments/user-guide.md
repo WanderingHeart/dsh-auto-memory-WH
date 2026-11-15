@@ -1,4 +1,4 @@
-# WH 用户指南（1.0.0 稳定版）
+# WH 用户指南（1.0.1 稳定版）
 
 本指南面向已经安装 DeepSeek Harness（DSH）、想试用 WH 持久化记忆插件的用户。
 
@@ -33,7 +33,7 @@ WH 是 DSH 的持久化记忆插件（插件 ID `auto-memory-wh`，界面显示�
    C:\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd --version
    ```
 
-3. 准备好已核验的 `dsh-auto-memory-wh-1.0.0.tgz`，或通过宿主插件管理器安装 npm 精确版本 `dsh-auto-memory-wh@1.0.0`。
+3. 准备好已核验的 `dsh-auto-memory-wh-1.0.1.tgz`，或通过宿主插件管理器安装 npm 精确版本 `dsh-auto-memory-wh@1.0.1`。
 4. 关闭 DSH（安装/卸载插件时宿主不能正在运行）。
 5. **先备份**你准备使用的记忆目录（如果它已有内容）。
 
@@ -51,13 +51,13 @@ DSH 用 profile 管理配置。桌面应用通常使用 `desktop` profile，位�
 
 ```powershell
 $dsh = 'C:\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd'
-& $dsh plugin --profile desktop add 'C:\path\to\dsh-auto-memory-wh-1.0.0.tgz' --ignore-scripts
+& $dsh plugin --profile desktop add 'C:\path\to\dsh-auto-memory-wh-1.0.1.tgz' --ignore-scripts
 ```
 
 离线或需要固定 store 时：
 
 ```powershell
-& $dsh plugin --profile desktop add 'C:\path\to\dsh-auto-memory-wh-1.0.0.tgz' --ignore-scripts --prefer-offline --store-dir 'C:\path\to\pnpm-store'
+& $dsh plugin --profile desktop add 'C:\path\to\dsh-auto-memory-wh-1.0.1.tgz' --ignore-scripts --prefer-offline --store-dir 'C:\path\to\pnpm-store'
 ```
 
 安装完成后：
@@ -450,3 +450,7 @@ node .\scripts\verification\acceptance-suite.mjs 1.0.0 --with-host --with-concur
 ## rc.19 真实模型验证
 
 已用 deepseek-account/deepseek-flash 和四组虚构事实验证自动生成两层记忆、同项目新会话召回详情、跨项目只召回概括。使用实际宿主服务与测试脚本调度的 memory_read，不等同于桌面 UI 自主代理全流程；未做 VM 或模型成本测量。详见 [真实模型隔离验收](../progress/2026-11-15_007_默认开启与真实模型隔离验收.md)。
+
+## 1.0.1 合并历史
+
+重复与合并仅列出最近三条自动合并；“查看全部合并”打开当前范围的自动、手动及历史合并浮窗，可展开查看内容。点击 ×、窗外或 Esc 关闭，窗内点击保留。旧手动记录只有来源关系，没有可可靠还原的撤销快照，因此仅供查看；现有自动合并的撤销入口继续保留。

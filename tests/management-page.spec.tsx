@@ -784,3 +784,36 @@ describe('header, filters and side drawer (v0.8.2)', () => {
     expect(container.textContent).toContain('已写入，可在列表里查看。')
   })
 })
+
+describe('merge history popup (1.0.1)', () => {
+  it('shows only the newest three automatic merges and all history on demand', async () => {
+    const request = await setup()
+    const original = request.getMockImplementation()!
+    const entries = Array.from({ length: 5 }, (_, i) => ({ id: `am-${i}`, target: `merged-${i}`, at: `2026-11-${10+i}T00:00:00Z`, topic: 'test', score: 80, sources: ['a','b'] }))
+    request.mockImplementation(async (name, payload, method) => {
+      if (name === 'merge.autoScan') return { auto: [], ask: [], entries }
+      if (name === 'merge.history') return { entries: [...entries.map(e => ({ ...e, title: e.target, kind: 'automatic', body: 'merged text', available: true, canUndo: true })), { id: 'manual', title: 'Manual history', target: 'manual', at: '', kind: 'historical', sources: ['c','d'], body: 'manual text', available: true, canUndo: false }] }
+      return original(name, payload, method)
+    })
+    await click('重复与合并')
+    const section = container.querySelector('[aria-label="自动合并"]')!
+    expect(section.textContent).toContain('merged-4')
+    expect(section.textContent).toContain('merged-2')
+    expect(section.textContent).not.toContain('merged-0')
+    expect(section.textContent!.indexOf('merged-4')).toBeLessThan(section.textContent!.indexOf('merged-3'))
+    await click('查看全部合并')
+    const popup = container.querySelector('[role="dialog"][aria-label="全部合并记忆"]')!
+    expect(popup.textContent).toContain('merged-0')
+    expect(popup.textContent).toContain('Manual history')
+    await act(async () => popup.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })))
+    expect(container.querySelector('[aria-label="全部合并记忆"]')).not.toBeNull()
+    await act(async () => document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })))
+    expect(container.querySelector('[aria-label="全部合并记忆"]')).toBeNull()
+    await click('查看全部合并'); await click('关闭合并记录')
+    expect(container.querySelector('[aria-label="全部合并记忆"]')).toBeNull()
+    await click('查看全部合并')
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(container.querySelector('[aria-label="全部合并记忆"]')).toBeNull()
+    expect(container.querySelector('[aria-label="自动合并"]')).not.toBeNull()
+  })
+})

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1] — 2026-11-15
+
+- Show only the three newest automatic merges inline.
+- Add a floating, scrollable view of automatic and manual/historical merged memories in the selected scope, including merged content and existing automatic undo actions.
+- Close the history popup with its close button, an outside click, or Escape.
+
+
 ## [1.0.0] — 2026-11-15
 
 - Promote the verified rc.19 functionality to the first stable release: automatic project details and user-level summaries for all four memory types.

@@ -321,6 +321,8 @@ function MemoryArcView({ request, target, onPick, onClose }: { request: MemoryFa
     {view && <p className="dam-wh-note">按主题成章、章内按时间排序，跨用户层与全部项目；只读，不会修改或合并任何记忆。</p>}
   </section>
 }
+interface MergeHistoryEntry { id: string; target: string; title: string; at: string; kind: string; sources: string[]; body: string; available: boolean; canUndo: boolean }
+
 export function MemoryPage({ request }: MemoryPageProps): ReactNode {
   const [scope, setScope] = useState<Scope>('user')
   const [sessionId, setSessionId] = useState('')
@@ -335,6 +337,11 @@ export function MemoryPage({ request }: MemoryPageProps): ReactNode {
   const [mergeRows, setMergeRows] = useState<MergeRow[] | null>(null)
   const [mergePick, setMergePick] = useState<string[]>([])
   const [mergeNote, setMergeNote] = useState('')
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [history, setHistory] = useState<MergeHistoryEntry[] | null>(null)
+  const [historyError, setHistoryError] = useState('')
+  const historyRef = useRef<HTMLDivElement>(null)
+  const historyButtonRef = useRef<HTMLButtonElement>(null)
   const [autoMerge, setAutoMerge] = useState<AutoMergeView | null>(null)
   const [metricsView, setMetricsView] = useState<MetricsView | null>(null)
   const [quality, setQuality] = useState<QualityView | null>(null)
@@ -380,6 +387,25 @@ export function MemoryPage({ request }: MemoryPageProps): ReactNode {
   const returnFocusPendingRef = useRef(false)
   const saveFocusRef = useRef<HTMLElement | null>(null)
   const target = { scope, ...(sessionId ? { sessionId } : {}) }
+  useEffect(() => {
+    if (!historyOpen) return
+    let alive = true
+    setHistory(null); setHistoryError('')
+    void request('merge.history', { scope, ...(sessionId ? { sessionId } : {}) }, 'POST').then(result => {
+      if (alive) setHistory((result as { entries: MergeHistoryEntry[] }).entries)
+    }).catch(failure => { if (alive) setHistoryError(message(failure)) })
+    return () => { alive = false }
+  }, [historyOpen, scope, sessionId, refresh, request])
+  useEffect(() => {
+    if (!historyOpen) return
+    historyRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    const outside = (event: MouseEvent): void => {
+      const node = event.target as Node
+      if (!historyRef.current?.contains(node) && !historyButtonRef.current?.contains(node)) setHistoryOpen(false)
+    }
+    document.addEventListener('mousedown', outside)
+    return () => document.removeEventListener('mousedown', outside)
+  }, [historyOpen])
   // v0.6.1:质量体检结果按记录名并入列表,每条下面直接显示,不必再翻到底部
   const qualityIssues = new Map((quality?.records ?? []).map(record => [record.name, record.issues]))
   const reload = useCallback(() => setRefresh(n => n + 1), [])
@@ -425,6 +451,7 @@ export function MemoryPage({ request }: MemoryPageProps): ReactNode {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
+      if (historyOpen) { setHistoryOpen(false); historyButtonRef.current?.focus(); return }
       if (draft) { setDraft(null); setRelated(null) }
       if (mergeRows) { setMergeRows(null); setMergePick([]); setAutoMerge(null) }
       if (status) setStatus('')
@@ -450,7 +477,7 @@ export function MemoryPage({ request }: MemoryPageProps): ReactNode {
     }
     document.addEventListener('keydown', onKeyDown)
     return () => { document.removeEventListener('keydown', onKeyDown) }
-  }, [draft, mergeRows, status, type, searchOpen, settingsOpen, filterOpen, editionOpen, summaryOpen, panel])
+  }, [historyOpen, draft, mergeRows, status, type, searchOpen, settingsOpen, filterOpen, editionOpen, summaryOpen, panel])
   useEffect(() => {
     if (draft && !editorWasOpenRef.current) editorFocusPendingRef.current = true
     if (!draft && editorWasOpenRef.current) {
@@ -848,9 +875,25 @@ export function MemoryPage({ request }: MemoryPageProps): ReactNode {
             setAutoMerge(next)
           }) }}>合并这一组</button>
         </article>)}
-        <h2>最近自动合并（可撤销）</h2>
+        <div className="dam-wh-history-heading"><h2>最近自动合并（可撤销）</h2><button ref={historyButtonRef} className="dam-wh-btn" aria-expanded={historyOpen} onClick={() => setHistoryOpen(open => !open)}>查看全部合并</button></div>
+        {historyOpen && <div ref={historyRef} role="dialog" aria-label="全部合并记忆" className="dam-wh-history-popup">
+          <div className="dam-wh-drawer-head"><h2>全部合并记忆</h2><button className="dam-wh-icon-btn" aria-label="关闭合并记录" onClick={() => { setHistoryOpen(false); historyButtonRef.current?.focus() }}>×</button></div>
+          <p className="dam-wh-note">当前范围内的自动、手动及历史合并。旧记录可能缺少方式或撤销信息。</p>
+          {historyError && <p role="alert">{historyError}</p>}
+          {!history && !historyError && <p role="status">正在加载…</p>}
+          {history?.length === 0 && <p>还没有合并记录。</p>}
+          {history?.map(entry => <article key={entry.id}>
+            <strong>{entry.title}</strong>
+            <p className="dam-wh-note">{entry.at ? new Date(entry.at).toLocaleString() : '时间未知'} · {entry.kind === 'automatic' ? '自动合并' : '手动 / 历史合并'} · 来源：{entry.sources.join('、')}</p>
+            {entry.available ? <details><summary>查看合并内容</summary><pre className="dam-wh-history-body">{entry.body}</pre></details> : <p>合并目标已归档或不存在。</p>}
+            {entry.canUndo && <button className="dam-wh-btn" disabled={busy} onClick={() => { void act(async () => {
+              await request('merge.undo', { id: entry.id }, 'POST')
+              setAutoMerge(await request('merge.autoScan', { ...target }, 'POST') as AutoMergeView)
+            }) }}>撤销这次合并</button>}
+          </article>)}
+        </div>}
         {autoMerge.entries.length === 0 && <p>还没有自动合并记录。</p>}
-        {autoMerge.entries.map(entry => <article key={entry.id}>
+        {[...autoMerge.entries].sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.id.localeCompare(a.id)).slice(0, 3).map(entry => <article key={entry.id}>
           <strong>{entry.target}</strong>
           <p className="dam-wh-note">{new Date(entry.at).toLocaleString()} · 主题：{entry.topic} · {Math.round(entry.score)}% · 来源：{entry.sources.join('、')}</p>
           <button className="dam-wh-btn" disabled={busy} onClick={() => { void act(async () => {

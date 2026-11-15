@@ -276,6 +276,34 @@ export function registerMemoryApi(ctx: Context, store: MemoryStore, root: string
     }
     return { ok: true, target, merged, skipped }
   })
+  route('merge.history', 'POST', [...common], async data => {
+    requireFeature(currentFeatures().merge, '近重复与合并')
+    const { scope, cwd } = scopeOf(data)
+    const records = await store.list(scope, cwd)
+    const byName = new Map(records.map(record => [record.name, record]))
+    const ledger = (await config.autoMerge?.list() ?? []).filter(entry => entry.scope === scope && byName.has(entry.target))
+    const sources = new Map<string, Set<string>>()
+    for (const record of records) {
+      if (!record.supersededBy) continue
+      if (!sources.has(record.supersededBy)) sources.set(record.supersededBy, new Set())
+      sources.get(record.supersededBy)!.add(record.name)
+    }
+    for (const entry of ledger) {
+      if (!sources.has(entry.target)) sources.set(entry.target, new Set())
+      for (const name of entry.sources) sources.get(entry.target)!.add(name)
+    }
+    const entries = Array.from(sources, ([name, names]) => {
+      const record = byName.get(name)
+      const entry = ledger.find(item => item.target === name)
+      return {
+        id: entry?.id ?? `history:${name}`, target: name, title: record?.title ?? name,
+        at: entry?.at ?? (record?.updatedMs ? new Date(record.updatedMs).toISOString() : ''),
+        kind: entry ? 'automatic' : 'historical', sources: [...names], body: record?.body ?? '',
+        available: !!record, canUndo: !!entry && scope === 'user',
+      }
+    }).sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0) || b.id.localeCompare(a.id))
+    return { entries }
+  })
   route('merge.autoScan', 'POST', [...common], async data => {
     requireFeature(currentFeatures().merge, '近重复与合并')
     const { scope, cwd } = scopeOf(data)

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = join(here, '..', '..')
-const home = join(repo, '.work', 'S05', 'release-final-stable100')
+const home = join(repo, '.work', 'S05', 'release-final-stable101')
 const profile = 'wh-release-final'
 const memoryRoot = join(home, 'memory-wh')
 const evidenceDir = join(repo, 'docs', 'evidence', 'S05-release')
@@ -23,7 +23,7 @@ function runIsolated(phase, extra = []) {
   const result = spawnSync('powershell.exe', [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
     join(repo, 'scripts', 'verification', 'isolated-cli.ps1'),
-    '-Phase', phase, '-TestHome', 'release-final-stable100', '-Profile', profile,
+    '-Phase', phase, '-TestHome', 'release-final-stable101', '-Profile', profile,
     ...extra,
   ], { cwd: repo, encoding: 'utf8', timeout: 900_000 })
   if (result.status !== 0) throw new Error(`isolated-cli ${phase} failed: ${result.stderr || result.stdout}`)
@@ -107,23 +107,23 @@ seedMemory()
 const seeded = digest()
 check('memory-seeded', seeded.files >= 4, `${seeded.files} files`)
 
-const installed120 = install('1.0.0-rc.19')
+const installed120 = install('1.0.0')
 const digest120 = digest()
-check('install-1.0.0-rc.19', installed120 === '1.0.0-rc.19', installed120)
+check('install-1.0.0', installed120 === '1.0.0', installed120)
 check('data-readable-after-install', digest120.sha256 === seeded.sha256, digest120.sha256.slice(0, 16))
 
-const installed121 = install('1.0.0')
+const installed121 = install('1.0.1')
 const digest121 = digest()
-check('upgrade-1.0.0', installed121 === '1.0.0', installed121)
+check('upgrade-1.0.1', installed121 === '1.0.1', installed121)
 check('memory-unchanged-by-upgrade', digest121.sha256 === digest120.sha256, digest121.sha256.slice(0, 16))
 
-const rolledBack = install('1.0.0-rc.19')
+const rolledBack = install('1.0.0')
 const digestRollback = digest()
-check('rollback-1.0.0-rc.19', rolledBack === '1.0.0-rc.19', rolledBack)
+check('rollback-1.0.0', rolledBack === '1.0.0', rolledBack)
 check('memory-unchanged-by-rollback', digestRollback.sha256 === digest120.sha256, digestRollback.sha256.slice(0, 16))
 
-const restored = install('1.0.0')
-check('restore-final-candidate', restored === '1.0.0' && digest().sha256 === seeded.sha256, restored)
+const restored = install('1.0.1')
+check('restore-final-candidate', restored === '1.0.1' && digest().sha256 === seeded.sha256, restored)
 
 const dsh = spawnSync('powershell.exe', ['-NoProfile', '-Command', `& '${cli}' --version`], { encoding: 'utf8' })
 const dshVersion = `${dsh.stdout ?? ''}\n${dsh.stderr ?? ''}`.match(/\d+\.\d+\.\d+(?:-[\w.]+)?/)?.[0] ?? ''
@@ -137,12 +137,12 @@ const report = {
   at: startedAt,
   finishedAt: new Date().toISOString(),
   environment: {
-    isolatedHome: '.work/S05/release-final-stable100',
+    isolatedHome: '.work/S05/release-final-stable101',
     profile,
     dshVersion,
-    memoryRoot: '.work/S05/release-final-stable100/memory-wh',
+    memoryRoot: '.work/S05/release-final-stable101/memory-wh',
   },
-  versions: { seededBeforeInstall: before.version, installed: '1.0.0-rc.19', upgraded: '1.0.0', rolledBack: '1.0.0-rc.19' },
+  versions: { seededBeforeInstall: before.version, installed: '1.0.0', upgraded: '1.0.1', rolledBack: '1.0.0' },
   digests: {
     seeded: seeded.sha256,
     afterInstall: digest120.sha256,

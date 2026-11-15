@@ -88,3 +88,22 @@ describe('auto merge routes (v1.0.0-rc.2)', () => {
     expect((await store.read('kaoyan-note', 'user'))?.topic).toBe('考研')
   })
 })
+
+describe('combined merge history (1.0.1)', () => {
+  it('includes existing manual lineage and automatic ledger entries without mixing scopes', async () => {
+    await store.write({ name: 'manual-target', title: 'Manual', description: 'd', body: 'merged body', type: 'reference' }, 'user')
+    await store.write({ name: 'manual-source', description: 'd', body: 'original', type: 'reference', status: 'superseded', supersededBy: 'manual-target' }, 'user')
+    await store.write({ name: 'auto-target', description: 'd', body: 'automatic body', type: 'reference' }, 'user')
+    mount({ autoMerge: { scan: async () => ({ auto: [], ask: [] }), apply: async () => { throw Error('not used') }, undo: async () => null, list: async () => [
+      { id: 'auto', at: '2026-11-15T00:00:00Z', scope: 'user', topic: 'x', target: 'auto-target', sources: ['old-a', 'old-b'], score: 90 },
+      { id: 'foreign', at: '2026-11-15T00:00:00Z', scope: 'project', topic: 'x', target: 'auto-target', sources: ['private'], score: 90 },
+    ] } })
+    const result = await call('merge.history', { scope: 'user' })
+    expect(result.status).toBe(200)
+    const entries = result.data.entries as Array<Record<string, unknown>>
+    expect(entries).toHaveLength(2)
+    expect(entries.find(e => e.target === 'manual-target')).toMatchObject({ body: 'merged body', kind: 'historical', canUndo: false, sources: ['manual-source'] })
+    expect(entries.find(e => e.target === 'auto-target')).toMatchObject({ kind: 'automatic', canUndo: true, sources: ['old-a', 'old-b'] })
+    expect(JSON.stringify(entries)).not.toContain('private')
+  })
+})

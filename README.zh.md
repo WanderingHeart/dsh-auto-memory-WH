@@ -4,7 +4,7 @@
 
 插件提供主题整理、可撤销合并、原生提醒、可视化管理、导入导出与备份。按需读取正文、按字节预算注入索引；基础检索和词面合并不额外调用模型。自动或手动总结使用宿主配置的模型，会产生 token 消耗。
 
-当前稳定版 **1.0.0**。
+当前稳定版 **1.0.1**。
 
 - npm 包名：[`dsh-auto-memory-wh`](https://www.npmjs.com/package/dsh-auto-memory-wh)
 - GitHub 仓库：[`WanderingHeart/dsh-auto-memory-WH`](https://github.com/WanderingHeart/dsh-auto-memory-WH)
@@ -14,7 +14,7 @@
 需要 DSH `>=0.2.1-rc.5 <1.0.0`、Node `^22.19.0 || >=24.0.0` 及 package.json 声明的宿主服务。声明范围不代表所有版本组合都已实测。通过 DSH 插件管理器安装已经核验的发布包；首次安装建议先在独立 profile 中试用：
 
 ```powershell
-& 'C:\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd' plugin --profile wh-trial add 'dsh-auto-memory-wh@1.0.0' --ignore-scripts
+& 'C:\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd' plugin --profile wh-trial add 'dsh-auto-memory-wh@1.0.1' --ignore-scripts
 ```
 
 请根据实际安装位置调整 CLI 路径；安装到日常桌面配置时，将 `wh-trial` 换成对应的 profile 名称，通常为 `desktop`。
@@ -143,3 +143,7 @@
 总结质量受模型影响。已完成四种类型的真实模型分层测试，但不保证所有模型和任意对话都能正确总结、分类和召回。真实双设备 relay、长期提醒与移动端仍有验证边界。记忆虽然保存在本地，但会随宿主模型请求发送；本地存储不等于永不离开设备。归档不是隐私擦除。
 
 基于 AskTheWay/dsh-auto-memory v1.3.0 独立开发，保留 [MIT 许可](LICENSE)、[上游来源](UPSTREAM.md)和[第三方声明](THIRD_PARTY_NOTICES.md)。软件许可不授权公开用户记忆数据。
+
+### 合并历史（1.0.1）
+
+“重复与合并”中只显示最近三条自动合并；点击“查看全部合并”可悬浮查看当前范围内的自动、手动及历史合并和内容。支持 ×、窗外点击、Esc 关闭。已有自动合并账本保留最多100条可撤销记录；旧手动记录由现存来源关系还原，仅供查看，不能恢复已删除的历史。

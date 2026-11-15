@@ -5,7 +5,7 @@ export const PACKAGE_NAME = 'dsh-auto-memory-wh'
  * fails when they diverge, so release bumps cannot leave audit/snapshot
  * records claiming an older candidate.
  */
-export const PLUGIN_VERSION = '1.0.0'
+export const PLUGIN_VERSION = '1.0.1'
 export const PLUGIN_ID = 'auto-memory-wh'
 export const API_BASE = '/api/auto-memory-wh'
 export const LOCALE_NAMESPACE = 'autoMemoryWH'
