@@ -10,3 +10,13 @@ Thumbs.db
 .ref-ui.png
 measure.mjs
 evals/datasets/longmemeval/
+
+# Local verification data and cache
+.work/
+
+# Private local evidence and machine-specific operations are not public source.
+docs/evidence/
+scripts/verification/manual/
+scripts/verification/reapply-whale-patch.mjs
+actual-panel.png
+*.tgz

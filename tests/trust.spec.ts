@@ -1,6 +1,6 @@
 /**
  * 1.0.0 可信记忆测试:status/evidence 落盘往返、write 继承(更新不清状态)、
- * 注入过滤(disputed/superseded 不注入,candidate/undefined 注入)、
+ * 注入过滤(disputed/superseded 不注入,仅 verified 注入)、
  * 指令注入模式检测(误报纪律:feedback 合法内容不命中)、
  * sanitizeCandidate 状态标注与证据链、buildHealthReport 三榜、
  * KV-safe 断言(同日两次渲染字节相同)。
@@ -33,7 +33,7 @@ afterEach(async () => {
 })
 
 describe('status/evidence 落盘往返', () => {
-  it('parse→serialize 保留 status 与 evidence;非法 status 静默回退信任态', () => {
+  it('parse→serialize 保留 status 与 evidence;非法 status 静默回退未审核态', () => {
     const record: MemoryRecord = {
       name: 'sample', description: 'd', type: 'user', body: 'b', scope: 'user',
       status: 'candidate', evidence: { sessionId: 'sess-1', quote: '原文引用' },
@@ -41,7 +41,7 @@ describe('status/evidence 落盘往返', () => {
     const parsed = parseMemory(serializeMemory(record), 'user')
     expect(parsed?.status).toBe('candidate')
     expect(parsed?.evidence).toEqual({ sessionId: 'sess-1', quote: '原文引用' })
-    // 手改 YAML 写错:回退 undefined(信任态),不砖存储
+    // 手改 YAML 写错:回退 undefined(未审核态),不砖存储
     const bad = parseMemory(serializeMemory(record).replace('status: candidate', 'status: nonsense'), 'user')
     expect(bad?.status).toBeUndefined()
     // 半截证据(sessionId 缺失)整块丢弃
@@ -86,22 +86,24 @@ describe('注入过滤(disputed/superseded 不注入)', () => {
   const rec = (over: Partial<MemoryRecord>): MemoryRecord => ({
     name: 'x', description: 'd', type: 'user', body: 'b', scope: 'user', ...over,
   })
-  it('renderIndexBody:candidate 与 undefined 注入;disputed/superseded 被过滤', () => {
+  it('renderIndexBody:仅 disputed/superseded/停用被过滤', () => {
     const index = renderIndexBody([
       rec({ name: 'plain' }),
       rec({ name: 'cand', status: 'candidate' }),
       rec({ name: 'ver', status: 'verified' }),
       rec({ name: 'disp', status: 'disputed' }),
       rec({ name: 'sup', status: 'superseded' }),
+      rec({ name: 'off', disabled: true }),
     ])
     expect(index).toContain('(plain.md)')
     expect(index).toContain('(cand.md)')
     expect(index).toContain('(ver.md)')
     expect(index).not.toContain('(disp.md)')
     expect(index).not.toContain('(sup.md)')
+    expect(index).not.toContain('(off.md)')
   })
   it('端到端:disputed 记忆重建索引后不进注入文本,文件仍保留', async () => {
-    await store.write({ name: 'good', description: 'd', type: 'user', body: 'b' }, 'user')
+    await store.write({ name: 'good', status: 'verified', description: 'd', type: 'user', body: 'b' }, 'user')
     await store.write({ name: 'bad', description: 'd2', type: 'user', body: 'b2', status: 'disputed' }, 'user')
     const detail = renderMemoryIndexDetail(store, config, '/w')
     expect(detail.text).toContain('good')
@@ -190,7 +192,7 @@ describe('buildHealthReport 三榜', () => {
 
 describe('KV-safe(同日两次渲染字节相同)', () => {
   it('两次 renderMemoryIndexDetail 字节级一致(状态过滤不破坏当日稳定性)', async () => {
-    await store.write({ name: 'alpha', description: 'd', type: 'user', body: 'b' }, 'user')
+    await store.write({ name: 'alpha', status: 'verified', description: 'd', type: 'user', body: 'b' }, 'user')
     await store.write({ name: 'beta', description: 'd2', type: 'user', body: 'b2', status: 'candidate' }, 'user')
     const a = renderMemoryIndexDetail(store, config, '/w')
     const b = renderMemoryIndexDetail(store, config, '/w')

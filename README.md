@@ -1,272 +1,46 @@
-# dsh-auto-memory
+# dsh-auto-memory-WH
 
-[![CI](https://github.com/AskTheWay/dsh-auto-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/AskTheWay/dsh-auto-memory/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/dsh-auto-memory)](https://www.npmjs.com/package/dsh-auto-memory)
-[![npm downloads](https://img.shields.io/npm/dm/dsh-auto-memory)](https://www.npmjs.com/package/dsh-auto-memory)
-[![License: MIT](https://img.shields.io/npm/l/dsh-auto-memory)](LICENSE)
-[![Node](https://img.shields.io/node/v/dsh-auto-memory)](package.json)
+[中文说明](README.zh.md)
 
-[English](README.md) | [中文](README.zh.md)
+Independent persistent-memory plugin derived from AskTheWay/dsh-auto-memory v1.3.0. Package: `dsh-auto-memory-wh`. Original attribution remains in [LICENSE](LICENSE), [UPSTREAM.md](UPSTREAM.md), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and the upstream archive.
 
-> ### Your dsh agent forgets everything you tell it. Every. Single. Session.
-> **Fix it with one command.** Claude Code-style persistent memory for
-> [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) — native,
-> zero servers, zero embeddings, zero setup.
+Stable release: **1.0.0**. Test evidence and package hashes belong to the [release report](docs/attachments/release.md).
 
-```sh
-dsh plugin --profile demo add dsh-auto-memory
+Memories are local Markdown files. Bounded titles and summaries enter the prompt; bodies are read on demand. Since rc.10, records do not require manual approval: disputed, superseded, disabled and expired records are excluded. Topic grouping, reversible lexical merging, relationship views and JSON import/export are available. New reminders live in the host scheduler, not the memory store; optional whale notifications depend on an external integration.
+
+Requires DSH `>=0.2.1-rc.5 <1.0.0`, Node `^22.19.0 || >=24.0.0`, and the host peer versions declared in package.json. This range is not a claim that every combination was tested.
+
+Install the exact release using the Desktop embedded CLI and a fresh test profile:
+
+```powershell
+& 'C:\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd' plugin --profile wh-trial add 'dsh-auto-memory-wh@1.0.0' --ignore-scripts
 ```
 
-Say *"Remember: I'm a Python backend engineer preparing for interviews"* today —
-open a brand-new session tomorrow, ask *"what do you know about me?"*, and it
-**remembers**.
+Back up the profile manifest and memory-wh before a real upgrade. Restart DSH after installation. The plugin requires access to its profile and storage directories; administrator execution is not a general requirement.
 
-![dsh-auto-memory — persistent memory for DeepSeek Harness](imgs/img-1.png)
+Packaged docs: [configuration](docs/configuration.md), [injection and UI](docs/trust-ui.md), [storage recovery](docs/storage-recovery.md), [CHANGELOG](CHANGELOG.md).
 
----
+Full source-repository docs (not all shipped in npm): [final report](docs/progress/2026-11-15_001_dsh-auto-memory-wh_结题报告（1.0.0-rc.17）.md), [release report](docs/attachments/release.md), [user guide](docs/attachments/user-guide.md), [development timeline](docs/progress/README.md).
 
-## Highlights
+Lexical merging can miss or incorrectly combine records. Real two-device relay, long-term reminders and mobile use have not been fully verified. Host model calls can transmit injected memory; local storage is not a promise that memory never leaves the device. Archiving is not secure erasure. The software license does not authorize publishing user data.
 
-**1.x — trustworthy memory + measured end-to-end**: consolidation products are
-born `candidate` with verbatim evidence quotes; only *you* can grant
-`verified`; disputed memories are never re-injected; every write passes an
-injection-pattern guard at the store choke point. And it's measured: four
-evaluation layers (deterministic / recall / consolidation / end-to-end) plus a
-LongMemEval-S alignment run — including an honestly published off-target score.
-Full history: [CHANGELOG.md](CHANGELOG.md) ·
-[Releases](https://github.com/AskTheWay/dsh-auto-memory/releases)
 
-## Claude Code has this. dsh didn't. Now it does.
+## Two-level memory (rc.18)
 
-DeepSeek Harness is the hottest open agent harness on GitHub right now —
-models, tools, sandboxes, everything is a plugin. But it ships with **no memory
-subsystem at all**. The official answer is three *default-off* MCP configs to
-third-party servers, which the official docs themselves qualify: not
-auto-injected, no forgetting policy, substring-only search. Your agent has
-amnesia by design.
+Project scope retains detailed context across sessions with the same project cwd. User scope retains concise cross-project abstracts. All four types (`user`, `feedback`, `project`, `reference`) work in both scopes; type is a content category, not a visibility setting.
 
-`dsh-auto-memory` closes that gap natively:
+Enable `autoSummarize: true` in the standard/full edition and keep `enableUserScope: true` for automatic extraction. Since rc.19, autoSummarize and enableUserScope both default to true; explicit false settings are respected. The existing summary request produces both project detail and a `userSummary` of at most 160 characters; no additional model request is introduced. Manual session summarization uses the same path. `memory_write` can also supply `userSummary`, which is saved automatically after the project write.
 
-| | MCP bridge approach | **dsh-auto-memory** |
-|---|---|---|
-| Memories injected into **every** system prompt, automatically | ✗ | ✓ (zero tokens when empty) |
-| Typed memories: user / feedback / project / reference | ✗ | ✓ |
-| Workspace + user scope layers — no cross-project leakage | ✗ | ✓ |
-| Crash & concurrency safety (cross-process locks, orphan recovery) | — | ✓ |
-| External services / databases / embeddings required | ✓✓✓ | **none — just plain Markdown files** |
+For example, details about a completed Ackermann car project and its VM remain in that project; other projects can receive “The user previously completed an Ackermann car project.” The summary keeps the original type. Repeated extraction updates its source-linked abstract; different projects do not overwrite one another. Abstracts do not copy detailed bodies, evidence quotes, paths, credentials or project topic ids. Obvious sensitive formats are rejected, but this is not a complete privacy classifier.
 
-Memories are ordinary files under `$DSH_HOME/memory/` — hand-editable,
-grep-able, git-friendly, yours.
+The model may omit an abstract if there is no cross-project value. Missing/invalid abstracts or failed writes retain the project detail and are reported in logs (or the tool result); details are never used as a fallback abstract. Disabling user scope stops abstract creation and injection. Existing memories are not automatically rewritten on upgrade. Manual panel edits/imports/archives do not run a model or rewrite the other layer; manage the two records separately when needed.
 
-### Trustworthy, not just persistent (1.0.0)
+Each accepted project candidate may add one user abstract beyond `autoSummarizeMaxMemories`, which limits primary records. Summaries share the existing `maxBytes` injection budget. Index injection contains titles and descriptions; full bodies require tool reads.
 
-Model-consolidated memories can be confidently wrong — and a wrong memory
-gets re-injected every session. So memories carry a **trust status**:
-consolidation products are born `candidate` (with a verbatim evidence quote
-from the transcript — fabricated citations are dropped by checking against
-it), `verified` can only be granted by *you* in the panel, `disputed` /
-`superseded` are never injected. Every write path passes an injection-pattern
-guard at the store choke point; content changes downgrade trust and expire
-old evidence. A `🩺` health board surfaces unverified / zombie / conflicting
-memories for review. Same flat files, same zero services — now with an audit
-trail for *whether to believe them*.
+## Upgrade, rollback and optional notifications
 
-## One minute to feel it
+Back up the target profile, previous package and complete memory directory before upgrading. rc.18 keeps the storage format; generated abstracts are ordinary Markdown records. Rolling back to rc.17 preserves them but stops automatic maintenance. Software rollback does not undo memory changes.
 
-```sh
-node scripts/demo.mjs   # no API key, no browser: watch write → index → inject → recall → forget
-```
+Whale bubbles/sounds require an external compatible `window.__dshWhaleNotify` hook. The local whale patch is excluded from the release package, and other users must arrange the compatible integration themselves. Whale updates or reinstalls may overwrite the hook; check compatibility and reapply the appropriate patch. Core memory and native reminders work without it.
 
-Or for real, in a chat: tell your agent things worth remembering. The model
-calls `memory_write` / `memory_read` / `memory_list` / `memory_search` /
-`memory_delete`, following Claude Code's write discipline: **dedupe-and-update
-over piling up**, absolute dates only, `[[name]]` cross-links, `feedback`
-memories carry **Why:** / **How to apply:** lines.
-
-## The memory panel
-
-The whole memory system has one home in the dsh Web UI: user-scope and
-project-scope groups, per-memory read counts and trust badges, pin / disable /
-edit / delete, injection statistics (per memory and per project, with budget
-truncation boards), the health board, and the Claude Code import/export
-bridges.
-
-![The memory panel: injection stats, trust badges, import/export](imgs/image-2.png)
-
-## Import from Claude Code — and take it back
-
-The panel's **📥 Import from Claude Code** button scans
-`~/.claude/projects/*/memory` read-only and lists every memory grouped by source
-project. Tick what you want and apply: fields map one-to-one (same four types,
-H1 → title, ISO `modified` → epoch), same-name memories are skipped, never
-overwritten.
-
-Imported files carry an `origin` block (`kind` / `slug` / `file` / `imported` /
-`hash`) in their frontmatter, so the checkbox becomes reversible: uncheck an
-already-imported memory and apply, and it is deleted from this plugin — the
-Claude Code source stays untouched and can be re-imported any time. If the
-memory was edited after import, the content fingerprint no longer matches; the
-entry is marked **modified** and kept, never silently discarded. Memories
-imported by earlier versions (no `origin` block) are recognised by exact content
-equality and marked **legacy import**, so they can be revoked the same way.
-
-You don't even have to check: the host scans the Claude memory directory every
-5 minutes, and a hint bar appears above the list whenever sync-able memories
-are waiting.
-
-### Export to AGENTS.md — the bridge goes both ways
-
-A panel button renders your *trusted* memories (verified or unset — candidates
-and disputed never leave) as an **AGENTS.md** snippet copied to the clipboard.
-Paste it into any tool that follows the AGENTS.md convention — Claude Code,
-Codex, Cursor — and what this plugin learned travels with you. Same flat
-files, two directions.
-
-## What the model actually sees
-
-Every request, one system-prompt section (order 4000) carries the index —
-re-evaluated per step, byte-budgeted, and **gone entirely when the store is
-empty**:
-
-```
-# Persistent memory index
-## Project memories
-- [压测过 PostgreSQL](id-generator-benchmark.md) — psycopg2 连接池有踩坑经验 (2026-09)
-- [用户是 Python 后端工程师](user-prefers-python.md) — 正在准备面试; 偏好中文交流
-```
-
-Chinese titles, YAML frontmatter, one file per memory — exactly the Claude
-Code `MEMORY.md` model, rebuilt natively on dsh's prompt-assembly pipeline.
-
-## Hardened before first release
-
-This plugin survived a **12-agent adversarial code review** (680k tokens of
-source-level scrutiny) before v0.1.0. Five production-grade traps were caught
-and fixed — with regression tests — including two that would have been
-field incidents:
-
-- **The NTFS silent destroyer**: a memory named `memory` collides with
-  `MEMORY.md` on case-insensitive filesystems — the write *succeeds* while
-  destroying the record. Blocked by a reserved-name guard.
-- **The poisoned-prompt bomb**: three literal `{{{ }}}` braces in any memory
-  could crash *every* model request in the workspace — with no way for the
-  model to self-recover. Neutralized by a converging sanitizer.
-
-Plus: orphaned-lock self-healing (Ctrl+C can't brick your memory store),
-symlink-read protection, malformed-file tolerance, stable index ordering to
-protect KV-prefix caches, and a strict no-custom-session-events policy (they
-make dsh sessions refuse to resume).
-
-## Measured, not just claimed
-
-A deterministic evaluation layer ([evals/](evals/README.md)) runs in CI —
-no LLM, fully reproducible:
-
-- **Injection cost is a flat line** — measured on the real render path
-  (typical ~40-char descriptions, default 4 KB budget):
-
-  | memories | 0 | 10 | 20 | 50 | 100 | 200 |
-  |---|---|---|---|---|---|---|
-  | injected section | **0 B** | 2.3 KB (~564 tok) | 3.2 KB (~801 tok) | 4.0 KB (~1008 tok) | 4.0 KB | 4.0 KB |
-
-  The byte budget is a hard ceiling — from 50 memories on, the section is
-  pinned at the cap no matter how many exist (oldest/lowest-ranked rows
-  truncate with a marker). An empty store injects **0 bytes**: the whole
-  section disappears.
-- **Compaction-proof by construction**: the index rides in a *dynamic*
-  system-prompt section re-evaluated on every step assembly — context
-  compaction only compresses conversation history, so memories survive every
-  compaction without re-injection tricks. Approaches that store memories as
-  session-log messages lose theirs on the first compaction pass.
-- **End-to-end lift measured** (L2, the layer above the pipeline): with the
-  full consolidation → injection → QA loop, the model answers project-specific
-  probe questions at **95.8% with memories vs 16.7% without — a +79.2 point
-  net contribution** (standard dataset, 30 probes, blind LLM judge). An
-  honest off-target data point is published too: on LongMemEval-S (122k-token
-  chat-haystack needle-search, 30-question stratified subset, official judge
-  protocol) the plugin scores 23.3% overall — quantifying exactly how far
-  this coding-scenario design is from the chat-needle task, instead of
-  cherry-picking benchmarks. [Results](evals/results/) ·
-  [methodology](evals/README.md)
-- **Eviction never misfires**: four-class mixed scenario — only
-  stale-zero-read memories get hidden; zero files lost; one read revives.
-- **Known limitation, pinned as baseline**: budget truncation is currently
-  positional (index order), not relevance-ranked — probe retention under
-  half-budget pressure drops to ~38%→10% as N grows. **Pinning fixes it for
-  what matters**: pinned probes retain **≥80%** at the same budget (0.3.0);
-  full relevance ranking remains on the roadmap.
-
-This evaluation layer already caught a real bug: the byte budget used to
-exclude the policy text, overshooting by ~800 bytes (fixed, regression-tested).
-
-**Verified platform matrix** (manually tested, not just declared):
-
-| | CLI | Desktop | Web profile |
-|---|---|---|---|
-| dsh version | 0.1.5-rc.2 | 0.2.0-rc.2 | 0.2.1-rc.2 |
-| status | ✓ tools/prompt/consolidation | ✓ panel + import + audit | ✓ panel + import |
-
-**188 tests + four evaluation layers (L0 deterministic / L1 recall / L3 consolidation / L2 end-to-end + LongMemEval alignment). 0 runtime deps beyond `yaml`, ~35 kB installed.**
-
-## Install
-
-```sh
-dsh plugin --profile demo add dsh-auto-memory   # from npm (prebuilt)
-dsh --profile demo                               # restart the profile
-```
-
-From source: `npm install && npm run build && dsh plugin --profile demo add /abs/path`.
-Requires `@deepseek-ai/dsh >= 0.1.5-rc.2` (Node `^22.19 || >=24`). Works with
-the official desktop client — verified on 0.2.0-rc.2.
-
-## Configuration
-
-Override in your profile's `cordis.patch.yml` (config replaces wholesale):
-
-```yaml
-- id: auto-memory
-  config:
-    maxBytes: 4096          # injection budget (index + guidance + wrapper)
-    memoryDir: D:/memories  # default: $DSH_HOME/memory
-    enableUserScope: true   # false: user layer off on every path
-    autoSummarize: false         # true: on root-session end, a background LLM files durable new facts
-    autoSummarizeMaxMemories: 5  # cap per consolidation
-    autoSummarizeMaxTokens: 2048 # consolidation output cap
-    staleAfterDays: 0            # >0: soft-hide zero-read memories older than N days (files kept)
-```
-
-## How it works (60 seconds)
-
-- **Write**: tool `execute` → name normalized to `[a-z0-9-]` (reserved names
-  rejected) → cross-process file lock (official `dsh-atomic-write`) → atomic
-  write → full index rebuild inside the lock.
-- **Inject**: one dynamic section re-evaluated on every step assembly; reads
-  the index synchronously, enforces the byte budget, neutralizes `{{`.
-  Tool writes take effect on the **very next request** — no restart, ever.
-- **Audit**: no custom session events (third-party types make dsh refuse to
-  resume); everything flows through standard `tool/call` / `tool/result`.
-  Since 1.0, every injection is also logged to `audit.jsonl` (which memories,
-  which session, what the budget cut) and aggregated into the panel's
-  statistics — memory with a paper trail.
-
-Deep dives: [design decisions](docs/design.md) ·
-[postmortem: shipping a PR to awesome-dsh-plugin](docs/postmortem-pr-5696.md)
-
-## Roadmap
-
-- [x] P0 — typed store, four tools, prompt injection, scoped layers, crash safety
-- [x] P1 — auto-consolidation on session end, forgetting & eviction, recall expansion, human-gated bulk delete
-- [x] P2 — Web UI memory panel, token-cost / recall-quality benchmarks
-- [x] P3 — update-replace semantics, matching core shared with the eval harness
-- [x] 0.8–1.0 — Claude Code import bridge (revocable), injection audit + stats, trustworthy memory (status / evidence / guard / health)
-- [x] 1.1–1.2 — L2 end-to-end + LongMemEval alignment, `memory_search`, import watcher, reverse AGENTS.md export
-- [ ] L2 refinements (relevance-ranked truncation), community-driven work
-
-## Changelog
-
-Per-version notes: [CHANGELOG.md](CHANGELOG.md) ·
-[GitHub Releases](https://github.com/AskTheWay/dsh-auto-memory/releases)
-
-## License
-
-MIT
+See the [Chinese README](README.zh.md) for configuration tables, editions and examples, and the [user guide](docs/attachments/user-guide.md) for detailed operations. Model quality is not guaranteed by deterministic synthetic tests.

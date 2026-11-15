@@ -1,0 +1,76 @@
+// Real packaged SessionStore/fork with installed WH bundle; synthetic agent shells and data.
+const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
+const assert = require('node:assert/strict'), { pathToFileURL } = require('node:url');
+const root = path.resolve(__dirname, '../..');
+const base = 'C:/DeepSeek Harness/resources/app.asar/dsh/node_modules/';
+const installed = path.join(root, '.work/S05/installation-home/profiles/wh-s05/node_modules/dsh-auto-memory-wh');
+const evidence = path.join(root, 'docs/evidence/S05-session');
+fs.mkdirSync(evidence, { recursive: true });
+const scratch = fs.mkdtempSync(path.join(root, '.work/S05/session-'));
+process.env.DSH_HOME = path.join(scratch, 'home');
+const pkg = name => { const dir = base + '@deepseek-ai/' + name; const meta = JSON.parse(fs.readFileSync(dir + '/package.json', 'utf8')); return require(dir + '/' + meta.main); };
+const result = { status: 'running', installedVersion: JSON.parse(fs.readFileSync(path.join(installed, 'package.json'), 'utf8')).version, checks: [], limitation: 'Real packaged SessionStore and installed WH bundle, but synthetic agent shells. No model, compaction command, actual subagent factory, or durable session backend.' };
+(async () => {
+ let ctx;
+ try {
+  assert.equal(result.installedVersion, '0.1.0-rc.2');
+  const source = fs.readFileSync(path.join(installed, 'lib/index.js'), 'utf8');
+  result.bundleSha256 = crypto.createHash('sha256').update(source).digest('hex');
+  const rewritten = source.replace(/from "(@deepseek-ai\/[^"/]+)"/g, (_, name) => { const dir = base + name; const meta = JSON.parse(fs.readFileSync(dir + '/package.json', 'utf8')); return 'from ' + JSON.stringify(pathToFileURL(dir + '/' + meta.main).href); });
+  const bundle = path.join(scratch, 'plugin.mjs'); fs.writeFileSync(bundle, rewritten);
+  const { Context } = pkg('cordis'); ctx = new Context();
+  await ctx.plugin(pkg('dsh-session').default, {});
+  await ctx.plugin(pkg('dsh-system-prompt').default, {});
+  await ctx.plugin(pkg('dsh-tools').default, {});
+  await ctx.plugin(pkg('cordis-plugin-loader').default, { baseUrl: pathToFileURL(scratch + '/').href });
+  const memoryDir = path.join(scratch, 'memory');
+  await ctx.loader.create({ id: 'wh-session', name: pathToFileURL(bundle).href, config: { memoryDir, maxBytes: 4096, enableUserScope: true, autoSummarize: false, staleAfterDays: 0 } });
+  await ctx.loader.await();
+  const cwdA = path.join(scratch, 'project-a'), cwdB = path.join(scratch, 'project-b');
+  const parentSession = ctx.sessions.create('real-parent', { meta: { cwd: cwdA } });
+  const forkSession = ctx.sessions.fork(parentSession, undefined, 'real-fork');
+  const childSession = ctx.sessions.create('real-child', { meta: { cwd: cwdB, parentSession: parentSession.id, origin: 'subagent', delegationDepth: 1 } });
+  assert.equal(forkSession.header.parentSession, parentSession.id);
+  assert.equal(forkSession.header.cwd, cwdA);
+  assert.equal(childSession.header.delegationDepth, 1);
+  assert.equal(childSession.header.origin, 'subagent');
+  result.checks.push('packaged SessionStore creates real root, fork and subagent-classified child session objects');
+  const agent = session => ({ session, options: { subagentDepth: session.header.delegationDepth ?? 0 } });
+  const write = async (session, scope, name) => {
+   const description = name + ' synthetic'; const body = 'Synthetic session data.'; const type = scope === 'user' ? 'user' : 'project';
+   await ctx.tools.get('memory_write').execute({ name, description, body, type, scope }, { agent: agent(session) });
+   const file = fs.readdirSync(memoryDir, { recursive: true, withFileTypes: true }).find(item => item.isFile() && item.name === name + '.md');
+   assert.ok(file);
+   const target = path.join(file.parentPath, file.name);
+   const reviewHash = crypto.createHash('sha256').update(JSON.stringify([name, '', description, type, body])).digest('hex');
+   const raw = fs.readFileSync(target, 'utf8'); assert.match(raw, /status: candidate/);
+   fs.writeFileSync(target, raw.replace('status: candidate', 'status: verified\nreviewHash: ' + reviewHash));
+  };
+  await write(parentSession, 'user', 'shared-real-session');
+  await write(parentSession, 'project', 'parent-real-session');
+  await write(childSession, 'project', 'child-real-session');
+  const text = async session => (await ctx.systemPrompt.assemble({ agent: agent(session) })).sections.find(item => item.name === 'memory-wh:index')?.text ?? '';
+  const [parentText, forkText, childText] = await Promise.all([text(parentSession), text(forkSession), text(childSession)]);
+  assert.match(parentText, /parent-real-session/); assert.doesNotMatch(parentText, /child-real-session/);
+  assert.match(forkText, /parent-real-session/); assert.doesNotMatch(forkText, /child-real-session/);
+  assert.match(childText, /child-real-session/); assert.doesNotMatch(childText, /parent-real-session/);
+  for (const value of [parentText, forkText, childText]) assert.match(value, /shared-real-session/);
+  result.checks.push('real SessionStore fork inherits parent cwd and WH scopes user/project records correctly');
+  const surfaceSession = ctx.sessions.create('real-surface', { meta: { cwd: cwdA } });
+  const first = surfaceSession.append('user/message', { id: crypto.randomUUID(), role: 'user', content: [{ type: 'text', text: 'synthetic before replacement' }], source: { kind: 'user' } }, { surfaceOp: 'append' });
+  surfaceSession.append('user/message', { id: crypto.randomUUID(), role: 'user', content: [{ type: 'text', text: 'synthetic after replacement' }], source: { kind: 'user' } }, { surfaceOp: { op: 'replace', startSeq: first.seq, endSeq: first.seq }, sourceEventSeqs: [first.seq] });
+  assert.equal(surfaceSession.deriveMessages().length, 1);
+  assert.match(JSON.stringify(surfaceSession.deriveMessages()), /synthetic after replacement/);
+  assert.match(await text(surfaceSession), /parent-real-session/);
+  result.checks.push('WH assembles reviewed memory after a real Session surface replacement without a model call');
+  const restored = ctx.sessions.create('real-restored', { seed: surfaceSession.snapshotEvents(), meta: { cwd: cwdA } });
+  assert.match(JSON.stringify(restored.deriveMessages()), /synthetic after replacement/);
+  assert.match(await text(restored), /parent-real-session/);
+  result.checks.push('new SessionStore object seeded from a synthetic snapshot reassembles reviewed memory');
+  await ctx.loader.remove('wh-session'); await ctx.loader.await();
+  assert.equal(ctx.tools.schemas().filter(item => item.name.startsWith('memory_')).length, 0);
+  result.checks.push('Loader removes installed WH tools with live SessionStore sessions');
+  result.status = 'passed';
+ } catch (error) { result.status = 'failed'; result.error = { message: error.message, stack: error.stack }; process.exitCode = 1; }
+ finally { if (ctx) await ctx.fiber.dispose(); fs.writeFileSync(path.join(evidence, 'probe.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result, null, 2)); }
+})();

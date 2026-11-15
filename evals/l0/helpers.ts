@@ -1,3 +1,4 @@
+import { reviewFingerprint } from '../../src/store.ts'
 /**
  * L0 评测共用的合成记忆构造器(确定性,无 LLM)。
  * 供 index-budget / injection-snr / eviction-correctness / link-expansion 使用,
@@ -69,6 +70,8 @@ export function makeMemories(n: number, seed = 42, probeEvery = 0): SynthMemory[
 export async function seedStore(store: MemoryStore, memories: SynthMemory[], scope: 'project' | 'user', cwd?: string): Promise<void> {
   const dir = store.dir(scope, cwd)
   await fsp.mkdir(dir, { recursive: true })
+  // Initialize an empty synthetic WH scope before the fixture bypasses normal writes.
+  await store.refreshIndex(scope, cwd)
   const now = Date.now()
   for (const m of memories) {
     await fsp.writeFile(
@@ -76,6 +79,11 @@ export async function seedStore(store: MemoryStore, memories: SynthMemory[], sco
       serializeMemory({ name: m.name, title: m.title, description: m.description, type: m.type, body: m.body, ...(m.pinned === true ? { pinned: true } : {}), ...(m.importance !== undefined ? { importance: m.importance } : {}), createdMs: now, updatedMs: now }),
       'utf8',
     )
+  }
+  for (const m of memories) {
+    const file = join(dir, m.name + '.md')
+    const raw = await fsp.readFile(file, 'utf8')
+    await fsp.writeFile(file, raw.replace('---\n', '---\nstatus: verified\nreviewHash: ' + reviewFingerprint({ name: m.name, title: m.title, description: m.description, type: m.type, body: m.body }) + '\n'))
   }
   await store.refreshIndex(scope, cwd)
 }

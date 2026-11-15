@@ -1,7 +1,7 @@
 # harness-sessions 数据集格式(v1)
 
 面向 coding-agent 记忆插件的合成评测数据集。每份数据 = 一个虚拟开发者的
-多会话剧本 + 金标事实 + 探针题。指标定义见 [../README.md](../README.md)。
+多会话剧本 + 金标事实 + 探针题。指标定义见 [../README.md](../../README.md)。
 
 ## 顶层结构
 

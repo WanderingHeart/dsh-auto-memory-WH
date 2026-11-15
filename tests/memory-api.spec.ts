@@ -1,200 +1,212 @@
-/**
- * 宿主 Web API 测试(0.10.0):不启服务器,用假 Connection 收集路由处理器,
- * 直接以 Request 调用。覆盖 import.claude.scan 的逐条状态返回、apply 的
- * "导入 + 撤销"一次往返、严格入参校验与 nothing to import 分支。
- * 外部世界断言原则:撤销后读真实落盘文件确认已删除。
- */
-
+/** Production routes with a synthetic authenticated carrier; real Desktop auth is a separate gate. */
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { promises as fsp } from 'node:fs'
+import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
-import { MemoryStore, projectKey } from '../src/store.ts'
+import { MemoryStore } from '../src/store.ts'
 import { registerMemoryApi } from '../src/memory-api.ts'
-
-const BASE = '/api/auto-memory'
-const CWD = 'D:\\api-proj'
-const SLUG = 'D--api-proj'
-
-const CLAUDE_MEMORY = `---
-name: sample-memory
-description: 样例记忆
-metadata:
-  node_type: memory
-  type: project
-  modified: 2026-09-01T00:00:00.000Z
----
-
-# 标题
-
-正文事实。
-`
-
-interface RegisteredRoute {
-  path: string
-  fetch: (request: Request) => Promise<Response>
-}
-
-let base: string
-let home: string
-let store: MemoryStore
-let routes: Map<string, RegisteredRoute['fetch']>
-
-function mount(homeDir: string, staleAfterDays = 0): void {
+import { renderMemoryIndexDetail } from '../src/prompt.ts'
+import type { Config } from '../src/index.ts'
+let root: string, store: MemoryStore
+let routes: Map<string, (r: Request) => Promise<Response>>
+const cwd = 'D:\\synthetic-project', other = 'D:\\another-project'
+const sample = { scope: 'project', sessionId: 's1', name: 'alpha', description: 'synthetic description', body: 'synthetic body', type: 'project', expectedRevision: null }
+function mount(enableUserScope = true, authenticated = true) {
   routes = new Map()
-  const connection = {
-    fetch: {
-      register: (route: RegisteredRoute): void => { routes.set(route.path, route.fetch) },
-    },
+  const connection = { requestRejection: authenticated ? (r: Request) => r.headers.has('deny') ? 403 : undefined : undefined,
+    fetch: { register: (route: { path: string; fetch: (r: Request) => Promise<Response> }) => { routes.set(route.path.split('/').pop()!, route.fetch); return () => {} } } }
+  registerMemoryApi({ get: () => connection } as unknown as Context, store, root, { maxBytes: 4096, enableUserScope, resolveProject: id => ({ s1: cwd, s2: other } as Record<string, string>)[id], listProjects: () => [{ id: 's1', cwd }, { id: 's2', cwd: other }, { id: 'stale', cwd }] })
+}
+async function call(route: string, data: Record<string, unknown>, method = 'POST', headers: Record<string, string> = {}) {
+  const url = 'http://local/api/auto-memory-wh/' + route
+  const request = method === 'GET' ? new Request(url + '?' + new URLSearchParams(data as Record<string, string>), { headers }) : new Request(url, { method, headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(data) })
+  const response = await routes.get(route)!(request)
+  return { status: response.status, data: await response.json() as any }
+}
+beforeEach(async () => { root = await fs.mkdtemp(join(tmpdir(), 'wh-api-')); store = new MemoryStore(root); mount() })
+afterEach(async () => { await fs.rm(root, { recursive: true, force: true }) })
+describe('WH management boundary', () => {
+  it('lists only host-confirmed active project sessions', async () => {
+    const active = await call('sessions.active', {}, 'GET')
+    expect(active.status).toBe(200)
+    expect(active.data.sessions).toEqual([{ id: 's1', cwd }, { id: 's2', cwd: other }])
+    expect((await call('sessions.active', { cwd }, 'GET')).status).toBe(400)
+    expect((await call('sessions.active', {}, 'GET', { deny: '1' })).status).toBe(403)
+  })
+  it('requires carrier authentication and fails closed without it', async () => {
+    expect((await call('memory.write', sample, 'POST', { deny: '1' })).status).toBe(403)
+    mount(true, false)
+    expect((await call('memory.write', sample)).status).toBe(503)
+    expect(await store.read('alpha', 'project', cwd)).toBeNull()
+  })
+  it('rejects unknown sessions, arbitrary cwd, status grants and retired bulk/import routes', async () => {
+    expect((await call('memory.write', { ...sample, sessionId: 'unknown' })).status).toBe(403)
+    expect((await call('memory.write', { ...sample, cwd: other })).status).toBe(400)
+    expect((await call('memory.write', { ...sample, status: 'verified' })).status).toBe(400)
+    expect([...routes.keys()].some(name => /claude|delete_all|prune/.test(name))).toBe(false)
+  })
+  it('candidate creation, explicit review, metadata preservation and stale editor conflict', async () => {
+    const created = await call('memory.write', sample)
+    expect(created.status).toBe(200); expect(created.data.record.status).toBe('candidate')
+    const target = { scope: 'project', sessionId: 's1', name: 'alpha', expectedRevision: created.data.record.revision }
+    expect((await call('memory.review', { ...target, status: 'verified', confirm: false })).status).toBe(400)
+    const reviewed = await call('memory.review', { ...target, status: 'verified', confirm: true })
+    expect(reviewed.data.record.status).toBe('verified')
+    expect(renderMemoryIndexDetail(store, { maxBytes: 4096, enableUserScope: false } as Config, cwd).injected).toEqual(['alpha'])
+    const patched = await call('memory.patch', { ...target, expectedRevision: reviewed.data.record.revision, pinned: true })
+    expect(patched.data.record.status).toBe('verified')
+    expect((await call('memory.write', { ...sample, body: 'stale replacement', expectedRevision: created.data.record.revision })).status).toBe(409)
+    expect((await store.read('alpha', 'project', cwd))?.body).toBe('synthetic body')
+    const changed = await call('memory.write', { ...sample, title: 'changed title', expectedRevision: patched.data.record.revision })
+    expect(changed.data.record.status).toBe('candidate')
+  })
+  it('hides superseded records from the default list but keeps them filterable', async () => {
+    const created = await call('memory.write', sample)
+    const successor = await call('memory.write', { ...sample, name: 'beta', description: 'successor description' })
+    await store.supersede('alpha', 'project', cwd, created.data.record.revision, 'beta')
+    const listed = await call('groups.list', { scope: 'project', sessionId: 's1' }, 'GET')
+    expect(listed.data.records.map((r: { name: string }) => r.name)).toEqual(['beta'])
+    const filtered = await call('groups.list', { scope: 'project', sessionId: 's1', status: 'superseded' }, 'GET')
+    expect(filtered.data.records.map((r: { name: string }) => r.name)).toEqual(['alpha'])
+    expect(successor.status).toBe(200)
+  })
+  it('enforces user disable and per-project reads, exports and pagination', async () => {
+    await call('memory.write', sample); await call('memory.write', { ...sample, name: 'beta' })
+    const page = await call('groups.list', { scope: 'project', sessionId: 's1', limit: 1, offset: 1 }, 'GET')
+    expect(page.data.total).toBe(2); expect(page.data.records).toHaveLength(1); expect(page.data.records[0].body).toBeUndefined()
+    expect((await call('groups.list', { scope: 'project', sessionId: 's2' }, 'GET')).data.total).toBe(0)
+    expect((await call('memory.read', { scope: 'project', sessionId: 's2', name: 'alpha' }, 'GET')).status).toBe(404)
+    const exported = await call('export.markdown', { scope: 'project', sessionId: 's1' }, 'GET')
+    expect(exported.data.files).toHaveLength(2); expect(exported.data.includesAudit).toBe(false)
+    expect(exported.data.files[0].bytes).toBe(Buffer.byteLength(exported.data.files[0].content))
+    mount(false); expect((await call('groups.list', { scope: 'user' }, 'GET')).status).toBe(403)
+  })
+  it('archives with CAS and refuses altered archive hash', async () => {
+    const created = await call('memory.write', sample)
+    const deleted = await call('memory.delete', { scope: 'project', sessionId: 's1', name: 'alpha', expectedRevision: created.data.record.revision })
+    expect(deleted.status).toBe(200)
+    const archive = (await call('archive.list', { scope: 'project', sessionId: 's1' }, 'GET')).data.archives[0]
+    expect(archive.id).toBe(deleted.data.archiveId)
+    const restore = { scope: 'project', sessionId: 's1', id: archive.id, expectedHash: archive.hash }
+    expect((await call('archive.restore', { ...restore, expectedHash: '0'.repeat(64) })).status).toBe(409)
+    expect((await call('archive.restore', restore)).status).toBe(200)
+    expect((await store.read('alpha', 'project', cwd))?.body).toBe('synthetic body')
+  })
+  it('rejects oversized requests without partial writes', async () => {
+    expect((await call('memory.write', { ...sample, body: 'x'.repeat(40000) })).status).toBe(413)
+    expect(await store.read('alpha', 'project', cwd)).toBeNull()
+  })
+})
+
+describe('merge suggestions and merge apply', () => {
+  async function seed() {
+    for (const [name, body] of [['ts-build', 'typescript build pipeline uses esbuild bundling'], ['ts-build-notes', 'typescript build pipeline also bundles tests with esbuild']] as const) {
+      await store.write({ name, description: body, body, type: 'reference', status: 'verified' }, 'project', cwd)
+    }
+    const first = (await store.read('ts-build', 'project', cwd))!
+    const second = (await store.read('ts-build-notes', 'project', cwd))!
+    return [{ name: first.name, revision: first.revision }, { name: second.name, revision: second.revision }]
   }
-  // 只需 connection 服务的假 Context:registerMemoryApi 只调用 ctx.get('connection')
-  const ctx = { get: (name: string) => (name === 'connection' ? connection : undefined) } as unknown as Context
-  registerMemoryApi(ctx, store, join(base, 'memory-root'), { maxBytes: 4096, homeDir, staleAfterDays })
-}
-
-async function seedClaude(): Promise<void> {
-  const projectDir = join(home, '.claude', 'projects', SLUG)
-  const memoryDir = join(projectDir, 'memory')
-  await fsp.mkdir(memoryDir, { recursive: true })
-  await fsp.writeFile(join(memoryDir, 'alpha.md'), CLAUDE_MEMORY, 'utf8')
-  await fsp.writeFile(join(projectDir, 's.jsonl'), JSON.stringify({ cwd: CWD }), 'utf8')
-}
-
-function post(path: string, payload: unknown): Promise<Response> {
-  const handler = routes.get(`${BASE}/${path}`)
-  if (handler === undefined) throw new Error(`route not registered: ${path}`)
-  return handler(new Request(`http://local${BASE}/${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
-  }))
-}
-
-beforeEach(async () => {
-  base = await fsp.mkdtemp(join(tmpdir(), 'dsh-memory-api-'))
-  home = join(base, 'home')
-  store = new MemoryStore(join(base, 'memory-root'))
-})
-
-afterEach(async () => {
-  await fsp.rm(base, { recursive: true, force: true })
-})
-
-describe('import.claude.scan / apply(0.10.0)', () => {
-  it('scan 返回逐条文件名/记忆名/摘要/状态;初始 pending', async () => {
-    await seedClaude()
-    mount(home)
-    const handler = routes.get(`${BASE}/import.claude.scan`)
-    expect(handler).toBeDefined()
-    const response = await handler!(new Request(`http://local${BASE}/import.claude.scan`))
-    expect(response.status).toBe(200)
-    const body = await response.json() as {
-      found: boolean
-      totalImportable: number
-      projects: Array<{ slug: string; files: Array<Record<string, unknown>> }>
-    }
-    expect(body.found).toBe(true)
-    expect(body.totalImportable).toBe(1)
-    expect(body.projects[0]?.slug).toBe(SLUG)
-    expect(body.projects[0]?.files[0]).toMatchObject({
-      file: 'alpha.md', name: 'sample-memory', description: '样例记忆', type: 'project', state: 'pending',
-    })
+  it('suggests clusters and requires confirmation', async () => {
+    const members = await seed()
+    const suggest = await call('memory.mergeSuggest', { scope: 'project', sessionId: 's1', minShared: 2 })
+    expect(suggest.status).toBe(200)
+    expect(suggest.data.clusters).toHaveLength(1)
+    expect(suggest.data.clusters[0].suggestedName).toBeTruthy()
+    const refused = await call('memory.merge', { scope: 'project', sessionId: 's1', name: 'ts-merged', type: 'reference', members })
+    expect(refused.status).toBe(400)
+    expect(await store.read('ts-merged', 'project', cwd)).toBeNull()
   })
-
-  it('apply:一次往返导入选中条目;再 apply 取消勾选 → 撤销删除;状态随之变化', async () => {
-    await seedClaude()
-    mount(home)
-
-    const imported = await post('import.claude.apply', {
-      items: [{ slug: SLUG, file: 'alpha.md' }], revoke: [], allToUser: false,
-    })
-    expect(imported.status).toBe(200)
-    const importResult = await imported.json() as { imported: number; revoked: number }
-    expect(importResult.imported).toBe(1)
-    expect(importResult.revoked).toBe(0)
-
-    // 落盘:项目层目录 + origin 溯源
-    const target = join(join(base, 'memory-root'), projectKey(CWD), 'sample-memory.md')
-    const raw = await fsp.readFile(target, 'utf8')
-    expect(raw).toContain('file: alpha.md')
-
-    // 重新扫描:状态 imported
-    const scanHandler = routes.get(`${BASE}/import.claude.scan`)!
-    const rescanned = await (await scanHandler(new Request(`http://local${BASE}/import.claude.scan`))).json() as {
-      projects: Array<{ files: Array<{ state: string }> }>
-    }
-    expect(rescanned.projects[0]?.files[0]?.state).toBe('imported')
-
-    // 取消勾选(revoke)后删除记忆文件
-    const revoked = await post('import.claude.apply', {
-      items: [], revoke: [{ slug: SLUG, file: 'alpha.md' }], allToUser: false,
-    })
-    const revokeResult = await revoked.json() as { revoked: number; imported: number }
-    expect(revokeResult.revoked).toBe(1)
-    expect(revokeResult.imported).toBe(0)
-    expect(await store.read('sample-memory', 'project', CWD)).toBeNull()
-    await expect(fsp.access(target)).rejects.toThrow()
+  it('creates a candidate target, supersedes sources and writes an audit event', async () => {
+    const members = await seed()
+    const applied = await call('memory.merge', { scope: 'project', sessionId: 's1', name: 'ts-merged', type: 'reference', members, confirm: true })
+    expect(applied.status).toBe(200)
+    expect(applied.data.target.status).toBe('candidate')
+    const first = (await store.read('ts-build', 'project', cwd))!
+    const second = (await store.read('ts-build-notes', 'project', cwd))!
+    expect(first).toMatchObject({ status: 'superseded', supersededBy: 'ts-merged' })
+    expect(second).toMatchObject({ status: 'superseded', supersededBy: 'ts-merged' })
+    const merged = (await store.read('ts-merged', 'project', cwd))!
+    expect(merged.body).toContain('## 来自 ts-build')
+    expect(merged.body).toContain('## 来自 ts-build-notes')
+    expect(merged.status).toBe('candidate')
+    const audit = await (await import('../src/audit-log.ts')).readAudit(root)
+    expect(audit.some(entry => entry.kind === 'merge_apply' && entry.target === 'ts-merged')).toBe(true)
   })
-
-  it('apply 严格校验 items/revoke 形状:畸形目标 400(fail-closed,不降级成全量)', async () => {
-    await seedClaude()
-    mount(home)
-    for (const payload of [
-      { items: [{}], revoke: [], allToUser: false },
-      { items: [], revoke: [{ slug: SLUG }], allToUser: false },
-      { items: 'all', revoke: [], allToUser: false },
-      { items: [], revoke: [null], allToUser: false },
-    ]) {
-      expect((await post('import.claude.apply', payload)).status).toBe(400)
-    }
-    // 未产生任何记忆
-    expect(await store.list('project', CWD)).toHaveLength(0)
+  it('ignores superseded records when scanning for duplicates and clusters', async () => {
+    await seed()
+    const first = (await store.read('ts-build', 'project', cwd))!
+    await store.supersede('ts-build', 'project', cwd, first.revision!, 'ts-build-notes')
+    const duplicates = await call('memory.duplicates', { scope: 'project', sessionId: 's1', threshold: 0.8 })
+    expect(duplicates.status).toBe(200)
+    expect(duplicates.data.groups).toHaveLength(0)
+    const suggest = await call('memory.mergeSuggest', { scope: 'project', sessionId: 's1', minShared: 2 })
+    expect(suggest.status).toBe(200)
+    expect(suggest.data.clusters).toHaveLength(0)
   })
-
-  it('无 Claude Code 记忆 → apply 400 nothing to import', async () => {
-    mount(join(base, 'no-claude-home'))
-    const response = await post('import.claude.apply', { items: [], revoke: [], allToUser: false })
-    expect(response.status).toBe(400)
-    expect((await response.json() as { error: string }).error).toBe('nothing to import')
+  it('skips stale superseded members instead of aborting the whole merge', async () => {
+    await seed()
+    const stale = (await store.read('ts-build', 'project', cwd))!
+    await store.supersede('ts-build', 'project', cwd, stale.revision!, 'ts-build-notes')
+    const notes = (await store.read('ts-build-notes', 'project', cwd))!
+    const applied = await call('memory.merge', { scope: 'project', sessionId: 's1', name: 'ts-merged', type: 'reference', members: [{ name: stale.name, revision: stale.revision }, { name: notes.name, revision: notes.revision }], confirm: true })
+    expect(applied.status).toBe(200)
+    expect(applied.data.target).toBeNull()
+    expect(applied.data.skipped).toContain('ts-build')
+    expect(await store.read('ts-merged', 'project', cwd)).toBeNull()
+  })
+  it('merges the active members when one source is already superseded', async () => {
+    await seed()
+    await store.write({ name: 'ts-build-extra', description: 'typescript build pipeline extra notes', body: 'typescript build pipeline extra notes', type: 'reference', status: 'verified' }, 'project', cwd)
+    const extra = (await store.read('ts-build-extra', 'project', cwd))!
+    const first = (await store.read('ts-build', 'project', cwd))!
+    await store.supersede('ts-build', 'project', cwd, first.revision!, 'ts-build-notes')
+    const notes = (await store.read('ts-build-notes', 'project', cwd))!
+    const applied = await call('memory.merge', { scope: 'project', sessionId: 's1', name: 'ts-merged', type: 'reference', members: [{ name: first.name, revision: first.revision }, { name: notes.name, revision: notes.revision }, { name: extra.name, revision: extra.revision }], confirm: true })
+    expect(applied.status).toBe(200)
+    expect(applied.data.target).not.toBeNull()
+    expect(applied.data.merged.sort()).toEqual(['ts-build-extra', 'ts-build-notes'])
+    expect(applied.data.skipped).toContain('ts-build')
   })
 })
 
-describe('groups.list 显示逻辑(0.10.0)', () => {
-  it('记忆按注入顺序返回(pinned → 三因子分 → name),并给出净预算 budgetBytes', async () => {
-    await store.write({ name: 'z-low', description: '低分', type: 'reference', body: 'x', importance: 1 }, 'user')
-    await store.write({ name: 'a-high', description: '高分', type: 'user', body: 'x', importance: 10 }, 'user')
-    await store.write({ name: 'm-pinned', description: '置顶', type: 'feedback', body: 'x', importance: 1, pinned: true }, 'user')
-    mount(home)
-    const handler = routes.get(`${BASE}/groups.list`)
-    expect(handler).toBeDefined()
-    const body = await (await handler!(new Request(`http://local${BASE}/groups.list`))).json() as {
-      groups: Array<{ memories: Array<{ name: string, stale: boolean }> }>
-      maxBytes: number
-      budgetBytes: number
-    }
-    expect(body.maxBytes).toBe(4096)
-    // 净预算必须小于整段预算(扣掉写入指导+协议壳),且不能是负数
-    expect(body.budgetBytes).toBeGreaterThan(0)
-    expect(body.budgetBytes).toBeLessThan(body.maxBytes)
-    // 面板顺序 = renderIndexBody 的顺序,而不是字母序
-    expect(body.groups[0]?.memories.map(memory => memory.name)).toEqual(['m-pinned', 'a-high', 'z-low'])
-    expect(body.groups[0]?.memories.every(memory => memory.stale === false)).toBe(true)
+describe('process metrics route', () => {
+  it('reports in-process write counters and storage snapshot', async () => {
+    await store.write({ name: 'metrics-one', description: 'metrics sample', body: 'metrics sample body', type: 'reference', status: 'verified' }, 'project', cwd)
+    const res = await call('memory.metrics', { scope: 'project', sessionId: 's1' })
+    expect(res.status).toBe(200)
+    expect(res.data.metrics.writes).toBeGreaterThanOrEqual(1)
+    expect(res.data.metrics.avgWriteMs).toBeGreaterThanOrEqual(0)
+    expect(res.data.audit).toMatchObject({ degraded: false })
+    expect(res.data.storage.root).toBe(root)
   })
+})
 
-  it('陈旧零引用记忆仍可见但标 stale(与"生效"区分)', async () => {
-    await store.write({ name: 'ancient', description: '旧', type: 'user', body: 'x' }, 'user')
-    const file = join(join(base, 'memory-root'), '_user', 'ancient.md')
-    const raw = await fsp.readFile(file, 'utf8')
-    const ancient = Date.now() - 100 * 86_400_000
-    await fsp.writeFile(file, raw.replace(/^updated: \d+$/m, `updated: ${ancient}`), 'utf8')
-    mount(home, 30)
-    const handler = routes.get(`${BASE}/groups.list`)!
-    const body = await (await handler(new Request(`http://local${BASE}/groups.list`))).json() as {
-      groups: Array<{ memories: Array<{ name: string, stale: boolean }> }>
-    }
-    expect(body.groups.find(group => group.memories.some(memory => memory.name === 'ancient')))
-      .toBeDefined()
-    expect(body.groups.flatMap(group => group.memories).find(memory => memory.name === 'ancient')?.stale).toBe(true)
+describe('transfer routes', () => {
+  it('exports a checksummed package and plans an import', async () => {
+    await store.write({ name: 'wire-alpha', description: 'wire sample', body: 'wire body', type: 'reference', status: 'verified' }, 'project', cwd)
+    const exported = await call('export.package', { scope: 'project', sessionId: 's1' })
+    expect(exported.status).toBe(200)
+    expect(exported.data.format).toBe('wh-memory-export')
+    expect(exported.data.checksum).toMatch(/^[0-9a-f]{64}$/)
+    const planned = await call('import.plan', { scope: 'project', sessionId: 's1', package: exported.data })
+    expect(planned.status).toBe(200)
+    expect(planned.data.skipped).toContain('wire-alpha')
+    const refused = await call('import.apply', { scope: 'project', sessionId: 's1', package: exported.data })
+    expect(refused.status).toBe(400)
+  })
+  it('can keep both sides when an import conflicts with reviewed content', async () => {
+    await store.write({ name: 'wire-alpha', description: 'wire sample', body: 'wire body', type: 'reference', status: 'verified' }, 'project', cwd)
+    const exported = await call('export.package', { scope: 'project', sessionId: 's1' })
+    const { exportChecksum } = await import('../src/transfer.ts')
+    const changed = { ...exported.data, records: (exported.data.records as Array<Record<string, unknown>>).map(record => record.name === 'wire-alpha' ? { ...record, body: 'wire body from another device' } : record) }
+    changed.checksum = exportChecksum(changed.records as never, 'project')
+    const forked = await call('import.apply', { scope: 'project', sessionId: 's1', package: changed, approvedChecksum: changed.checksum, onConflict: 'fork' })
+    expect(forked.status).toBe(200)
+    expect(forked.data.conflicts).toEqual([])
+    expect(forked.data.forked).toHaveLength(1)
+    expect((await store.read('wire-alpha', 'project', cwd))?.body).toBe('wire body')
+    expect((await store.read(forked.data.forked[0], 'project', cwd))?.body).toBe('wire body from another device')
   })
 })

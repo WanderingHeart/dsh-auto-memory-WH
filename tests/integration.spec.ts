@@ -28,13 +28,14 @@ describe('dsh-auto-memory 插件挂载', () => {
     await fsp.rm(root, { recursive: true, force: true })
   })
 
-  it('挂载成功:注册全部六个 memory_* 工具,不抛错', async () => {
+  it('挂载成功:注册全部七个 memory_* 工具,不抛错', async () => {
     await ctx.plugin(SystemPrompt, {})
     await ctx.plugin(ToolRuntime, {})
     await ctx.plugin(autoMemory, { maxBytes: 4096, memoryDir: root, enableUserScope: true, autoSummarize: false, autoSummarizeMaxMemories: 5, autoSummarizeMaxTokens: 2048, minImportance: 4, staleAfterDays: 0 })
 
     const names = ctx.tools.schemas().map(schema => schema.name)
-    for (const tool of ['memory_write', 'memory_read', 'memory_list', 'memory_delete', 'memory_prune', 'memory_delete_all']) {
+    expect(names.filter(name => name.startsWith('memory_'))).toHaveLength(7)
+    for (const tool of ['memory_write', 'memory_read', 'memory_list', 'memory_delete', 'memory_search', 'memory_remind', 'memory_reminders']) {
       expect(names, `registered tools: ${names.join(', ')}`).toContain(tool)
     }
   })
@@ -46,10 +47,9 @@ describe('dsh-auto-memory 插件挂载', () => {
 
     const assembly = await ctx.systemPrompt.assemble()
     // 裸组装无 agent:动态段求值为空串(渲染时被丢弃)——无记忆不占系统提示词
-    const sections = assembly.sections.filter(section => section.name.startsWith('memory:'))
-    expect(sections).toHaveLength(1)
-    expect(sections[0]?.name).toBe('memory:index')
-    expect(sections[0]?.text).toBe('')
+    const sections = assembly.sections.filter(section => section.name.startsWith('memory-wh:'))
+    expect(sections.map(section => section.name)).toEqual(['memory-wh:index'])
+    expect(sections.every(section => section.text === '')).toBe(true)
     // 插值渲染安全
     expect(() => renderPrompt(assembly)).not.toThrow()
   })

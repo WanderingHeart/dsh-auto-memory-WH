@@ -32,7 +32,7 @@ describe('export-agents', () => {
       { name: 'user-prefers-chinese', description: '用户偏好中文', scope: 'user' },
       { name: 'pg-lesson', description: '连接池教训', scope: 'project' },
     ], '2026-10-25')
-    expect(md).toContain('## Memory (exported from dsh-auto-memory, 2026-10-25)')
+    expect(md).toContain('## Memory (exported from dsh-auto-memory-wh, 2026-10-25)')
     expect(md).toContain('- 用户偏好中文 (user-prefers-chinese)')
     expect(md).toContain('- 连接池教训 (pg-lesson)')
     expect(md).toContain('AGENTS.md') // 来源注释(工具名锚定)
@@ -40,7 +40,7 @@ describe('export-agents', () => {
   it('空集返回空串(不产出空标题)', () => {
     expect(renderAgentsExport([], '2026-10-25')).toBe('')
   })
-  it('信任过滤:candidate/disputed/superseded 不导;undefined/verified 导', () => {
+  it('信任过滤:仅为 disputed/superseded 不导;candidate/legacy/verified 都导', () => {
     const records = [
       rec({ name: 'legacy', status: undefined }),
       rec({ name: 'ver', status: 'verified' }),
@@ -48,6 +48,6 @@ describe('export-agents', () => {
       rec({ name: 'disp', status: 'disputed' }),
       rec({ name: 'sup', status: 'superseded' }),
     ]
-    expect(trustedForExport(records).map(r => r.name)).toEqual(['legacy', 'ver'])
+    expect(trustedForExport(records).map(r => r.name)).toEqual(['legacy', 'ver', 'cand'])
   })
 })

@@ -1,3 +1,4 @@
+import { ReviewedFixtureStore as MemoryStore } from '../../tests/helpers/reviewed-store.ts'
 /**
  * L0-③ 淘汰零误杀(确定性)。
  * 四类混合场景断言:软淘汰只隐藏"超龄且零引用"一类;文件永不丢失;读取复活。
@@ -7,7 +8,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { promises as fsp } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { MemoryStore } from '../../src/store.ts'
+import { MemoryStore as OriginalMemoryStore } from '../../src/store.ts'
 
 const CWD = 'D:\\work\\eval-evict'
 const OLD = Date.now() - 200 * 86_400_000
@@ -48,7 +49,7 @@ describe('eviction-correctness', () => {
     expect(index).not.toContain('a-stale-zero-read') // 唯一应隐藏的
     expect(index).toContain('b-stale-but-read')
     expect(index).toContain('c-fresh')
-    expect(index).toContain('d-legacy')
+    expect(index).toContain('d-legacy') // v1.0.0-rc.10 起旧记录与自动记录都会注入，只有过期/争议/被取代/停用才隐藏。
     // 零误杀硬断言:文件层面 4 条全在
     expect((await store.list('project', CWD)).length).toBe(4)
   })

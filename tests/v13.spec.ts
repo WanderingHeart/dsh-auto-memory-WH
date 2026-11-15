@@ -1,3 +1,4 @@
+import { ReviewedFixtureStore as MemoryStore, renderReviewedIndexBody as renderIndexBody } from './helpers/reviewed-store.ts'
 /**
  * 1.3.0 三件测试:#17 价值过滤(isChitchat 双条件/minImportance 门槛/
  * echo 豁免)、#18 相关性截断(重排语义/KV-safe 兼容)、#19 演化谱系
@@ -9,7 +10,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { promises as fsp } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { MemoryStore } from '../src/store.ts'
+import { MemoryStore as OriginalMemoryStore } from '../src/store.ts'
 import type { Config } from '../src/index.ts'
 import { renderMemoryIndexDetail } from '../src/prompt.ts'
 import { isChitchat } from '../src/consolidate.ts'

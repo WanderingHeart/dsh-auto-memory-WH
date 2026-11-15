@@ -21,9 +21,9 @@ export interface AgentExportItem {
 export function renderAgentsExport(items: AgentExportItem[], dateISO: string): string {
   if (items.length === 0) return ''
   const lines = [
-    `## Memory (exported from dsh-auto-memory, ${dateISO})`,
+    `## Memory (exported from dsh-auto-memory-wh, ${dateISO})`,
     '',
-    '<!-- Trusted memories from the dsh-auto-memory plugin, formatted as AGENTS.md-convention notes. -->',
+    '<!-- Trusted memories from the dsh-auto-memory-wh plugin, formatted as AGENTS.md-convention notes. -->',
   ]
   for (const item of items) {
     lines.push(`- ${item.description} (${item.name})`)
@@ -31,7 +31,7 @@ export function renderAgentsExport(items: AgentExportItem[], dateISO: string): s
   return `${lines.join('\n')}\n`
 }
 
-/** 过滤信任态:status 缺省或 verified;其余(candidate/disputed/superseded)不导。 */
+/** 过滤信任态:只排除 disputed 与 superseded;candidate/legacy/verified 都导出。 */
 export function trustedForExport(records: MemoryRecord[]): MemoryRecord[] {
-  return records.filter(r => r.status === undefined || r.status === 'verified')
+  return records.filter(r => r.status !== 'disputed' && r.status !== 'superseded')
 }

@@ -1,0 +1,16 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+const root=path.resolve(import.meta.dirname,'../..');
+const prompt=fs.readFileSync(path.join(root,'.work/S05/host-reference/dsh-system-prompt/index.js'),'utf8');
+const agent=fs.readFileSync(path.join(root,'.work/S05/host-reference/dsh-agent-loop/index.js'),'utf8');
+const section=prompt.slice(prompt.indexOf('const sectionDefinitions ='),prompt.indexOf('const transformed = await this.ctx.waterfall'));
+assert.match(section,/text: typeof section\.text === "function" \? section\.text\(context\) : section\.text/);
+assert.doesNotMatch(section,/await section\.text\(context\)/);
+assert.match(prompt,/section\.text : interpolate\(section, assembly\.variables/);
+assert.match(prompt,/text\.length > 0/);
+assert.match(agent,/await this\.loopCtx\.systemPrompt\.assemble\(/);
+const result={status:'passed',host:'@deepseek-ai/dsh-system-prompt 0.2.1-rc.5',checks:['Section text callback is invoked synchronously and stored directly','No await around the callback in assembly','Rendering treats section text as a string and reads length','Agent loop awaits assembly itself, not each section callback'],conclusion:'An async section callback would place a Promise in assembly.sections[].text; it is not a supported replacement for current synchronous text. The async waterfall occurs after initial section evaluation.',source:'Packaged host copy in ignored .work/S05/host-reference; inspection script asserts exact observed expressions.',limitations:'Source contract inspection of this installed host build; no real model call or later version compatibility claim.'};
+fs.mkdirSync(path.join(root,'docs/evidence/S05-profile'),{recursive:true});
+fs.writeFileSync(path.join(root,'docs/evidence/S05-profile/prompt-callback-contract.json'),JSON.stringify(result,null,2));
+console.log(JSON.stringify(result,null,2));

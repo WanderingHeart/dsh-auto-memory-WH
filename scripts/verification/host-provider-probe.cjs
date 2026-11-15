@@ -1,0 +1,73 @@
+// Real packaged fork/spawn provider preparation with installed WH; no agent factory or model.
+const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
+const assert = require('node:assert/strict'), { pathToFileURL } = require('node:url');
+const root = path.resolve(__dirname, '../..');
+const base = 'C:/DeepSeek Harness/resources/app.asar/dsh/node_modules/';
+const installed = path.join(root, '.work/S05/installation-home/profiles/wh-s05/node_modules/dsh-auto-memory-wh');
+const evidence = path.join(root, 'docs/evidence/S05-provider'); fs.mkdirSync(evidence, { recursive: true });
+const scratch = fs.mkdtempSync(path.join(root, '.work/S05/provider-')); process.env.DSH_HOME = path.join(scratch, 'home');
+const pkg = name => { const dir = base + '@deepseek-ai/' + name; const meta = JSON.parse(fs.readFileSync(dir + '/package.json', 'utf8')); return require(dir + '/' + meta.main); };
+const result = { status: 'running', checks: [], installedVersion: JSON.parse(fs.readFileSync(path.join(installed, 'package.json'), 'utf8')).version, limitation: 'Packaged provider prepareContinuable plus real SessionStore and installed WH. Agent shells, provider execution and model are not real; compact command is inspected only.' };
+(async () => {
+ let ctx;
+ try {
+  assert.equal(result.installedVersion, '0.1.0-rc.2');
+  const source = fs.readFileSync(path.join(installed, 'lib/index.js'), 'utf8');
+  result.bundleSha256 = crypto.createHash('sha256').update(source).digest('hex');
+  const rewritten = source.replace(/from "(@deepseek-ai\/[^"/]+)"/g, (_, name) => { const dir = base + name; const meta = JSON.parse(fs.readFileSync(dir + '/package.json', 'utf8')); return 'from ' + JSON.stringify(pathToFileURL(dir + '/' + meta.main).href); });
+  const bundle = path.join(scratch, 'plugin.mjs'); fs.writeFileSync(bundle, rewritten);
+  const { Context } = pkg('cordis'); ctx = new Context();
+  await ctx.plugin(pkg('dsh-session').default, {});
+  await ctx.plugin(pkg('dsh-system-prompt').default, {});
+  await ctx.plugin(pkg('dsh-tools').default, {});
+  await ctx.plugin(pkg('cordis-plugin-loader').default, { baseUrl: pathToFileURL(scratch + '/').href });
+  const memoryDir = path.join(scratch, 'memory');
+  await ctx.loader.create({ id: 'wh-provider', name: pathToFileURL(bundle).href, config: { memoryDir, maxBytes: 4096, enableUserScope: true, autoSummarize: false, staleAfterDays: 0 } });
+  await ctx.loader.await();
+  const cwd = path.join(scratch, 'parent-project');
+  const parent = ctx.sessions.create('provider-parent', { meta: { cwd } });
+  parent.append('turn/start', { turn: 1 });
+  parent.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+  parent.append('turn/start', { turn: 2 });
+  let forkProvider, spawnProvider;
+  pkg('dsh-subagent-fork-in-process').apply({ subagents: { registerProvider: provider => { forkProvider = provider; } } }, { providerName: 'synthetic-fork' });
+  pkg('dsh-subagent-spawn-in-process').apply({ subagents: { registerProvider: provider => { spawnProvider = provider; } } }, { providerName: 'synthetic-spawn' });
+  assert.ok(forkProvider && spawnProvider);
+  const forkPlan = await forkProvider.prepareContinuable({ parent: { session: parent } });
+  const spawnPlan = await spawnProvider.prepareContinuable({ parent: { session: parent } });
+  assert.equal(forkPlan.seed.length, 2);
+  assert.deepEqual(forkPlan.seed.map(event => event.type), ['turn/start', 'turn/end']);
+  assert.deepEqual(spawnPlan, {});
+  result.checks.push('packaged fork provider keeps completed turns but excludes the open turn; spawn provider returns no seed');
+  const forkSession = ctx.sessions.create('provider-fork', { seed: forkPlan.seed, inheritedEventCount: forkPlan.seed.length, meta: { cwd, parentSession: parent.id, isSeeded: true, origin: 'subagent', delegationDepth: 1 } });
+  const spawnSession = ctx.sessions.create('provider-spawn', { meta: { cwd: path.join(scratch, 'spawn-project'), parentSession: parent.id, origin: 'subagent', delegationDepth: 1 } });
+  assert.equal(forkSession.header.delegationDepth, 1);
+  assert.equal(forkSession.inheritedEventCount, 2);
+  assert.equal(spawnSession.header.delegationDepth, 1);
+  const agent = session => ({ session, options: { subagentDepth: session.header.delegationDepth ?? 0 } });
+  const write = async (scope, name) => {
+   const description = name + ' synthetic'; const body = 'Synthetic provider fact.'; const type = scope === 'user' ? 'user' : 'project';
+   await ctx.tools.get('memory_write').execute({ name, description, body, type, scope }, { agent: agent(parent) });
+   const file = fs.readdirSync(memoryDir, { recursive: true, withFileTypes: true }).find(item => item.isFile() && item.name === name + '.md'); assert.ok(file);
+   const target = path.join(file.parentPath, file.name); const raw = fs.readFileSync(target, 'utf8'); assert.match(raw, /status: candidate/);
+   const reviewHash = crypto.createHash('sha256').update(JSON.stringify([name, '', description, type, body])).digest('hex');
+   fs.writeFileSync(target, raw.replace('status: candidate', 'status: verified\nreviewHash: ' + reviewHash));
+  };
+  await write('user', 'provider-shared'); await write('project', 'provider-parent-only');
+  const text = async session => (await ctx.systemPrompt.assemble({ agent: agent(session) })).sections.find(item => item.name === 'memory-wh:index')?.text ?? '';
+  const [forkText, spawnText] = await Promise.all([text(forkSession), text(spawnSession)]);
+  assert.match(forkText, /provider-parent-only/); assert.match(forkText, /provider-shared/);
+  assert.doesNotMatch(spawnText, /provider-parent-only/); assert.match(spawnText, /provider-shared/);
+  result.checks.push('WH follows the prepared fork parent cwd while spawn-classified child uses its separate project scope');
+  const compactCode = fs.readFileSync(base + '@deepseek-ai/dsh-command-compact/lib/index.js', 'utf8');
+  const basicCode = fs.readFileSync(base + '@deepseek-ai/dsh-compaction-basic/lib/index.js', 'utf8');
+  assert.ok(compactCode.includes('ctx.compaction.compactNow(invocation.agent'));
+  assert.ok(basicCode.includes('agent.runMaintenance(async (agentSignal)'));
+  assert.ok(basicCode.includes('if (range === null) return null'));
+  assert.ok(basicCode.includes('summarize: (input, owner, abort) => this.summarize'));
+  result.compactionContract = { commandCallsCompactNow: true, requiresAgentMaintenance: true, emptyRangeReturnsBeforeSummary: true, selectedRangeUsesSummarizer: true };
+  result.checks.push('packaged compact command and basic engine expose a no-range exit before summary, but selected-range path calls summarizer');
+  result.status = 'passed';
+ } catch (error) { result.status = 'failed'; result.error = { message: error.message, stack: error.stack }; process.exitCode = 1; }
+ finally { if (ctx) await ctx.fiber.dispose(); fs.writeFileSync(path.join(evidence, 'probe.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result, null, 2)); }
+})();

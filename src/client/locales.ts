@@ -4,8 +4,8 @@
  */
 
 export const zh = {
-  panel: '记忆',
-  title: '持久记忆',
+  panel: '记忆 WH',
+  title: '持久记忆 WH',
   intro: '管理跨会话保留的记忆文件',
   loading: '正在读取记忆…',
   error: '暂时无法读取记忆。',
@@ -139,8 +139,8 @@ export const zh = {
 export type PluginMemoryLocaleKey = keyof typeof zh
 
 export const en: Record<PluginMemoryLocaleKey, string> = {
-  panel: 'Memory',
-  title: 'Persistent memory',
+  panel: 'Memory WH',
+  title: 'Persistent memory WH',
   intro: 'Manage the memory files kept across sessions',
   loading: 'Loading memories…',
   error: 'Could not load memories right now.',

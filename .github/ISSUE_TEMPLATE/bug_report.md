@@ -14,27 +14,29 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. dsh --profile X (plugin version from npm ls / package.json)
-        2. Said "remember ..." in a session
-        3. Opened a new session, asked "what do you know about me?"
+        1. DSH Desktop 0.2.1-rc.5 with a disposable test profile and WH 0.1.0-rc.4
+        2. Created and reviewed a synthetic memory
+        3. Opened a new session and described the observed result
     validations:
       required: true
   - type: input
     id: versions
     attributes:
       label: Versions
-      description: 'dsh-auto-memory version, dsh version (dsh --version), OS'
-      placeholder: 'dsh-auto-memory 0.5.0, dsh 0.1.5-rc.2, Windows 11'
+      description: 'dsh-auto-memory-wh version, dsh version (embedded dsh.cmd --version), OS'
+      placeholder: 'WH 0.1.0-rc.4, DSH Desktop 0.2.1-rc.5 nightly, Windows 11'
     validations:
       required: true
   - type: textarea
     id: logs
     attributes:
       label: Relevant logs
-      description: Terminal output around the failure (redact any secrets first — the plugin redacts on write, logs may still contain them).
+      description: 'Only minimal relevant output. Remove credentials, personal memory text, local paths and session tokens before posting.'
       render: shell
   - type: markdown
     attributes:
       value: |
-        Tips: memory files live under `$DSH_HOME/memory/` and are plain Markdown —
-        you can inspect/edit them directly. `MEMORY.md` is derived; it rebuilds on the next write.
+        WH uses `$DSH_HOME/memory-wh/` by default, unless `memoryDir` is set.
+        The upstream plugin used a separate directory. Never post real memory files,
+        profile contents, backups or authentication links in an issue.
+        See `docs/configuration.md` and `docs/storage-recovery.md` before editing data.

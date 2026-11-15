@@ -1,0 +1,164 @@
+{
+  "version": 1,
+  "description": "v0.2.0 autoSummarize evaluation corpus. Each case is a synthetic session transcript + model candidate batch; expected outcome is asserted against a real MemoryStore.",
+  "cases": [
+    {
+      "id": "create-user-preference",
+      "description": "Durable user preference is created",
+      "options": { "minImportance": 4, "enableUserScope": true, "maxMemories": 5, "dedupe": true },
+      "seed": [],
+      "transcript": "USER: I always prefer tabs over spaces in every project.\nASSISTANT: Noted.",
+      "candidates": [
+        { "name": "prefers-tabs", "description": "User prefers tabs over spaces", "type": "user", "scope": "user", "body": "User prefers tabs over spaces.", "importance": 9, "evidence": "I always prefer tabs over spaces" }
+      ],
+      "expect": { "written": 1, "created": ["prefers-tabs"], "updated": [], "superseded": [], "duplicate": [], "chitchat": [], "lowImportance": [], "invalid": 0 }
+    },
+    {
+      "id": "skip-chitchat",
+      "description": "Pure thanks/goodbye is not persisted",
+      "options": { "minImportance": 4, "enableUserScope": true, "maxMemories": 5, "dedupe": true },
+      "seed": [],
+      "transcript": "USER: 谢谢，再见！\nASSISTANT: 再见。",
+      "candidates": [
+        { "name": "thanks-goodbye", "description": "User said thanks", "type": "reference", "body": "谢谢，再见！", "importance": 8 }
+      ],
+      "expect": { "written": 0, "created": [], "updated": [], "superseded": [], "duplicate": [], "chitchat": ["thanks-goodbye"], "lowImportance": [], "invalid": 0 }
+    },
+    {
+      "id": "skip-low-importance",
+      "description": "Marginal one-off reference below minImportance is dropped",
+      "options": { "minImportance": 4, "enableUserScope": true, "maxMemories": 5, "dedupe": true },
+      "seed": [],
+      "transcript": "USER: I looked at a blog post about CSS grid earlier.\nASSISTANT: OK.",
+      "candidates": [
+        { "name": "css-grid-blog", "description": "Read a CSS grid blog post", "type": "reference", "body": "User skimmed a blog post about CSS grid.", "importance": 2 }
+      ],
+      "expect": { "written": 0, "created": [], "updated": [], "superseded": [], "duplicate": [], "chitchat": [], "lowImportance": ["css-grid-blog"], "invalid": 0 }
+    },
+    {
+      "id": "update-existing-by-name",
+      "description": "Reusing an existing name updates the record instead of duplicating",
+      "options": { "minImportance": 4, "enableUserScope": true, "maxMemories": 5, "dedupe": true },
+      "seed": [
+        { "name": "editor-theme", "description": "Uses dark theme", "type": "user", "body": "User uses the dark editor theme.", "status": "verified", "importance": 6 }
+      ],
+      "transcript": "USER: I switched to the light theme for daytime work.\nASSISTANT: Updated.",
+      "candidates": [
+        { "name": "editor-theme", "description": "Uses light theme in daytime", "type": "user", "body": "User uses the light editor theme during the day.", "importance": 6 }
+      ],
+      "expect": { "written": 1, "created": [], "updated": ["editor-theme"], "superseded": [], "duplicate": [], "chitchat": [], "lowImportance": [], "invalid": 0 }
+    },
+    {
+      "id": "supersede-with-new-date",
+      "description": "A changed absolute date creates a successor and marks the old record superseded",
+      "options": { "minImportance": 4, "enableUserScope": true, "maxMemories": 5, "dedupe": true },
+      "seed": [
+        { "name": "release-date", "description": "Release is 2026-11-01", "type": "project", "body": "Release is 2026-11-01.", "status": "verified", "importance": 7 }
+      ],
+      "transcript": "USER: The release moved to 2026-12-01.\nASSISTANT: Noted the new date.",
+      "candidates": [
+        { "name": "release-date", "description": "Release is 2026-12-01", "type": "project", "body": "Release is 2026-12-01.", "importance": 7 }
+      ],
+      "expect": { "written": 1, "created": [], "updated": [], "superseded": ["release-date-v2"], "duplicate": [], "chitchat": [], "lowImportance": [], "invalid": 0 }
+    },
+    {
+      "id": "dedupe-same-body-new-name",
+      "description": "Same type/scope with identical body under a different name is skipped",
+      "options": { "minImportance": 4, "enableUserScope": true, "maxMemories": 5, "dedupe": true },
+      "seed": [
+        { "name": "python-version", "description": "Python 3.12", "type": "project", "body": "Uses Python 3.12 for this project.", "status": "verified", "importance": 6 }
+      ],
+      "transcript": "USER: We are on Python 3.12 here.\nASSISTANT: Yes.",
+      "candidates": [
+        { "name": "python-runtime", "description": "Python runtime", "type": "project", "body": "Uses Python 3.12 for this project.", "importance": 6 }
+      ],
+      "expect": { "written": 0, "created": [], "updated": [], "superseded": [], "duplicate": ["python-runtime"], "chitchat": [], "lowImportance": [], "invalid": 0 }
+    },
+    {
+      "id": "dedupe-case-and-punctuation",
+      "description": "Dedupe normalizes case, whitespace and common punctuation",
+      "options": { "minImportance": 4, "enableUserScope": true, "maxMemories": 5, "dedupe": true },
+      "seed": [
+        { "name": "python-version", "description": "Python 3.12", "type": "project", "body": "Uses Python 3.12 for this project.", "status": "verified", "importance": 6 }
+      ],
+      "transcript": "USER: python 3.12, right?\nASSISTANT: Right.",
+      "candidates": [
+        { "name": "runtime-details", "description": "Runtime details", "type": "project", "body": "uses python 3.12 for this project", "importance": 6 }
+      ],
+      "expect": { "written": 0, "created": [], "updated": [], "superseded": [], "duplicate": ["runtime-details"], "chitchat": [], "lowImportance": [], "invalid": 0 }
+    },
+    {
+      "id": "dedupe-disabled-creates",
+      "description": "With dedupe disabled the same body is written again",
+      "options": { "minImportance": 4, "enableUserScope": true, "maxMemories": 5, "dedupe": false },
+      "seed": [
+        { "name": "python-version", "description": "Python 3.12", "type": "project", "body": "Uses Python 3.12 for this project.", "status": "verified", "importance": 6 }
+      ],
+      "transcript": "USER: We are on Python 3.12 here.\nASSISTANT: Yes.",
+      "candidates": [
+        { "name": "python-runtime", "description": "Python runtime", "type": "project", "body": "Uses Python 3.12 for this project.", "importance": 6 }
+      ],
+      "expect": { "written": 1, "created": ["python-runtime"], "updated": [], "superseded": [], "duplicate": [], "chitchat": [], "lowImportance": [], "invalid": 0 }
+    },
+    {
+      "id": "different-type-is-not-duplicate",
+      "description": "Identical body in another type is a distinct fact",
+      "options": { "minImportance": 4, "enableUserScope": true, "maxMemories": 5, "dedupe": true },
+      "seed": [
+        { "name": "python-version", "description": "Python 3.12", "type": "project", "body": "Uses Python 3.12 for this project.", "status": "verified", "importance": 6 }
+      ],
+      "transcript": "USER: Python 3.12 is also my personal default.\nASSISTANT: Noted.",
+      "candidates": [
+        { "name": "python-personal-default", "description": "Personal Python default", "type": "user", "scope": "user", "body": "Uses Python 3.12 for this project.", "importance": 7 }
+      ],
+      "expect": { "written": 1, "created": ["python-personal-default"], "updated": [], "superseded": [], "duplicate": [], "chitchat": [], "lowImportance": [], "invalid": 0 }
+    },
+    {
+      "id": "invalid-candidate-counted",
+      "description": "Missing description is rejected without aborting the batch",
+      "options": { "minImportance": 4, "enableUserScope": true, "maxMemories": 5, "dedupe": true },
+      "seed": [],
+      "transcript": "USER: Something happened.\nASSISTANT: OK.",
+      "candidates": [
+        { "name": "no-description", "type": "project", "body": "Body without description.", "importance": 7 },
+        { "name": "valid-after-invalid", "description": "A valid candidate", "type": "project", "body": "This one is valid.", "importance": 7 }
+      ],
+      "expect": { "written": 1, "created": ["valid-after-invalid"], "updated": [], "superseded": [], "duplicate": [], "chitchat": [], "lowImportance": [], "invalid": 1 }
+    },
+    {
+      "id": "user-scope-downgraded",
+      "description": "With user scope disabled, user requests land in project scope",
+      "options": { "minImportance": 4, "enableUserScope": false, "maxMemories": 5, "dedupe": true },
+      "seed": [],
+      "transcript": "USER: I prefer dark mode everywhere.\nASSISTANT: Noted.",
+      "candidates": [
+        { "name": "prefers-dark-mode", "description": "Prefers dark mode", "type": "user", "scope": "user", "body": "User prefers dark mode.", "importance": 8 }
+      ],
+      "expect": { "written": 1, "created": ["prefers-dark-mode"], "updated": [], "superseded": [], "duplicate": [], "chitchat": [], "lowImportance": [], "invalid": 0 }
+    },
+    {
+      "id": "fake-evidence-dropped",
+      "description": "Evidence not present in the transcript is dropped but the fact is kept",
+      "options": { "minImportance": 4, "enableUserScope": true, "maxMemories": 5, "dedupe": true },
+      "seed": [],
+      "transcript": "USER: My timezone is Asia/Shanghai.\nASSISTANT: Noted.",
+      "candidates": [
+        { "name": "user-timezone", "description": "Timezone Asia/Shanghai", "type": "user", "scope": "user", "body": "User timezone is Asia/Shanghai.", "importance": 7, "evidence": "This sentence is not in the transcript at all." }
+      ],
+      "expect": { "written": 1, "created": ["user-timezone"], "updated": [], "superseded": [], "duplicate": [], "chitchat": [], "lowImportance": [], "invalid": 0 }
+    },
+    {
+      "id": "max-memories-cap",
+      "description": "At most autoSummarizeMaxMemories writes per batch",
+      "options": { "minImportance": 4, "enableUserScope": true, "maxMemories": 2, "dedupe": true },
+      "seed": [],
+      "transcript": "USER: Three preferences: tabs, dark mode, and vim keys.\nASSISTANT: Noted all three.",
+      "candidates": [
+        { "name": "pref-one", "description": "Prefers tabs", "type": "user", "body": "User prefers tabs.", "importance": 6 },
+        { "name": "pref-two", "description": "Prefers dark mode", "type": "user", "body": "User prefers dark mode.", "importance": 6 },
+        { "name": "pref-three", "description": "Prefers vim keys", "type": "user", "body": "User prefers vim keybindings.", "importance": 6 }
+      ],
+      "expect": { "written": 2, "created": ["pref-one", "pref-two"], "updated": [], "superseded": [], "duplicate": [], "chitchat": [], "lowImportance": [], "invalid": 0 }
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsdown'
+import { PACKAGE_NAME } from './src/identity.ts'
 
 // 基线模块表(浏览器模块表 PLATFORM_MODULES):必须保持 external。
 const BASELINE = (id: string): boolean =>
@@ -10,6 +11,12 @@ const BASELINE = (id: string): boolean =>
   || id === '@deepseek-ai/dsh-client-ui-dockkit' || id.startsWith('@deepseek-ai/dsh-client-ui-dockkit/')
 
 export default [
+  defineConfig({
+    entry: ['src/maintenance-cli.ts'],
+    outDir: 'lib', format: ['esm'], platform: 'node', target: 'es2024',
+    dts: false, clean: false,
+    outExtensions: () => ({ js: '.js' }),
+  }),
   // ---------- 宿主半(Node)----------
   defineConfig({
     entry: ['src/index.ts'],
@@ -18,7 +25,7 @@ export default [
     platform: 'node',
     target: 'es2024',
     dts: true,
-    clean: true,
+    clean: false,
     // 产物扩展名与 package.json(main/exports 的 lib/index.js)保持一致
     outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
   }),
@@ -27,7 +34,7 @@ export default [
   // window.__ModuleLoader__.load({ id, factory: (require) => { ... } })
   // 官方 preset(packages/client/tsdown.client.ts)未发布,此处手写等价包装。
   defineConfig({
-    name: 'dsh-auto-memory/client',
+    name: PACKAGE_NAME + '/client',
     entry: { client: 'src/client/index.ts' },
     outDir: 'lib',
     format: ['cjs'],
@@ -42,7 +49,7 @@ export default [
     outputOptions: {
       entryFileNames: 'client.js',
       banner: (chunk) =>
-        `window.__ModuleLoader__.load({ id: "dsh-auto-memory", ${chunk.isEntry ? '' : `chunk: ${JSON.stringify(chunk.fileName)}, `}factory: (require) => {`,
+        `window.__ModuleLoader__.load({ id: "${PACKAGE_NAME}", ${chunk.isEntry ? '' : `chunk: ${JSON.stringify(chunk.fileName)}, `}factory: (require) => {`,
       intro: 'var module = { exports: {} }; var exports = module.exports;',
       footer: 'return module.exports; } });',
     },

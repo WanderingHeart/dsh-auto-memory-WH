@@ -1,6 +1,7 @@
+import { ReviewedFixtureStore as MemoryStore, renderReviewedIndexBody as renderIndexBody } from './helpers/reviewed-store.ts'
 /**
  * 0.9.0 注入审计测试:appendAudit 落盘与失败静默、readAudit 坏行/尾行容错、
- * aggregateAudit 聚合、registerInjectionAudit 按会话签名去重与截断名单、
+ * aggregateAudit 聚合、registerInjectionAudit 每次组装分别记账与截断名单、
  * renderMemoryIndexDetail 的 injected/truncated 解析。
  * 外部世界断言原则:读真实落盘文件。
  */
@@ -9,7 +10,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { promises as fsp } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { MemoryStore, serializeMemory } from '../src/store.ts'
+import { MemoryStore as OriginalMemoryStore, serializeMemory } from '../src/store.ts'
 import type { Config } from '../src/index.ts'
 import { renderMemoryIndexDetail } from '../src/prompt.ts'
 import {
@@ -23,6 +24,8 @@ let config: Config
 beforeEach(async () => {
   base = await fsp.mkdtemp(join(tmpdir(), 'dsh-audit-'))
   store = new MemoryStore(base)
+  await store.refreshIndex('user')
+  await fsp.writeFile(join(base, '.wh-format.json'), JSON.stringify({ format: 'dsh-auto-memory-wh', version: 1 }))
   config = { maxBytes: 4096, enableUserScope: true, autoSummarize: false } as Config
 })
 
@@ -32,26 +35,28 @@ afterEach(async () => {
 
 describe('appendAudit / readAudit', () => {
   it('追加 JSONL 行并可读回;坏行与不完整尾行跳过(官方 jsonl 恢复语义)', async () => {
-    await appendAudit(base, { ts: 1, sessionId: 's1', cwd: '/a', injected: ['x'], truncated: [], bytes: 100 })
-    await appendAudit(base, { ts: 2, sessionId: 's1', cwd: '/a', injected: ['x', 'y'], truncated: [], bytes: 120 })
+    const now = Date.now()
+    await appendAudit(base, { ts: now, sessionId: 's1', cwd: '/a', injected: ['x'], truncated: [], bytes: 100 })
+    await appendAudit(base, { ts: now + 1, sessionId: 's1', cwd: '/a', injected: ['x', 'y'], truncated: [], bytes: 120 })
     // 手工写坏行与不完整尾行(崩溃残留形态)
     await fsp.appendFile(join(base, AUDIT_FILENAME), 'not json\n{"ts":3}\n{"ts":4,"sessionId":"s2"', 'utf8')
     const entries = await readAudit(base)
-    expect(entries.map(e => e.ts)).toEqual([1, 2]) // 坏行/不完整行/字段缺失行全部跳过
+    expect(entries.map(e => e.ts)).toEqual([now, now + 1]) // 坏行/不完整行/字段缺失行全部跳过
   })
   it('写入失败静默(只读目录)且不断链——后续追加仍可恢复', async () => {
     const badRoot = join(base, 'file-as-root') // 用文件占位目录名,mkdir/append 必败
     await fsp.writeFile(badRoot, 'x', 'utf8')
     await expect(appendAudit(badRoot, { ts: 1, sessionId: 's', cwd: '', injected: [], truncated: [], bytes: 0 })).resolves.toBeUndefined()
-    await appendAudit(base, { ts: 5, sessionId: 'ok', cwd: '', injected: [], truncated: [], bytes: 0 }) // 链未断
+    await appendAudit(base, { ts: Date.now(), sessionId: 'ok', cwd: '', injected: [], truncated: [], bytes: 0 }) // 链未断
     expect((await readAudit(base)).length).toBe(1)
   })
   it('并发追加(同进程串行链)全部落盘且行完整', async () => {
+    const now = Date.now()
     await Promise.all(Array.from({ length: 20 }, (_, i) =>
-      appendAudit(base, { ts: i, sessionId: `s${i}`, cwd: '', injected: [`m${i}`], truncated: [], bytes: i })))
+      appendAudit(base, { ts: now + i, sessionId: `s${i}`, cwd: '', injected: [`m${i}`], truncated: [], bytes: i })))
     const entries = await readAudit(base)
     expect(entries.length).toBe(20)
-    expect(entries.map(e => e.ts)).toEqual(Array.from({ length: 20 }, (_, i) => i)) // 顺序保持
+    expect(entries.map(e => e.ts)).toEqual(Array.from({ length: 20 }, (_, i) => now + i)) // 顺序保持
   })
 })
 
@@ -80,29 +85,30 @@ describe('aggregateAudit', () => {
 })
 
 describe('registerInjectionAudit(按会话签名去重)', () => {
-  it('同集合第二次调用不追加;集合变化追加;cleanup 后同集合也会重新记', async () => {
+  it('同集合、变化、清理后的每次回调均记录一次', async () => {
     await store.write({ name: 'alpha', description: 'd', type: 'user', body: 'b' }, 'user')
     const audit = registerInjectionAudit(store, config, base)
     expect(audit.text('/w', 's1')).toContain('alpha')
-    expect(audit.text('/w', 's1')).toContain('alpha') // 同集合:去重
+    expect(audit.text('/w', 's1')).toContain('alpha') // 同集合也记录
     await audit.flush()
     let entries = await readAudit(base)
-    expect(entries.length).toBe(1)
+    expect(entries.length).toBe(2)
     await store.write({ name: 'beta', description: 'd2', type: 'user', body: 'b2' }, 'user')
     audit.text('/w', 's1') // 集合变化:追加
     audit.text('/w', 's2') // 新会话:追加
     await audit.flush()
     entries = await readAudit(base)
-    expect(entries.length).toBe(3)
+    expect(entries.length).toBe(4)
     audit.cleanup('s1')
     audit.text('/w', 's1') // 清理后重新记
     await audit.flush()
-    expect((await readAudit(base)).length).toBe(4)
+    expect((await readAudit(base)).length).toBe(5)
   })
-  it('无记忆(cwd 无索引)返回空文本且不写审计', async () => {
+  it('已初始化空目录返回空文本并记录零字节组装', async () => {
     const audit = registerInjectionAudit(store, config, base)
     expect(audit.text('/nowhere', 's1')).toBe('')
-    expect(await readAudit(base)).toEqual([])
+    await audit.flush()
+    expect(await readAudit(base)).toMatchObject([{ kind: 'render_attempt', bytes: 0 }])
   })
 })
 
@@ -117,7 +123,7 @@ describe('renderMemoryIndexDetail(注入/截断名单)', () => {
     expect(detail.textBytes).toBe(Buffer.byteLength(detail.text, 'utf8'))
   })
   it('超预算:truncated 名单 = 全量 - 保留(审计的核心数据)', async () => {
-    // 极小预算强制截断;1024 是预算下限(见 prompt.ts Math.max),用下限触发
+    // 极小预算强制截断;使用 1024 字节的完整片段预算触发
     const tight = { ...config, maxBytes: 1024 } as Config
     for (let i = 0; i < 30; i++) {
       await store.write({ name: `mem-${String(i).padStart(2, '0')}`, description: `${'长描述'.repeat(12)}-${i}`, type: 'user', body: 'b' }, 'user')
@@ -148,11 +154,11 @@ describe('renderMemoryIndexDetail(注入/截断名单)', () => {
     audit.text('/w', 's1')
     await audit.flush()
     await store.delete('alpha', 'user')
-    audit.text('/w', 's1') // 空注入:复位签名
+    audit.text('/w', 's1') // 空组装也记录
     await store.write({ name: 'alpha', description: 'd', type: 'user', body: 'b' }, 'user')
     audit.text('/w', 's1') // 回归:必须重新记账
     await audit.flush()
     const entries = await readAudit(base)
-    expect(entries.length).toBe(2)
+    expect(entries.length).toBe(3)
   })
 })

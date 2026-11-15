@@ -1,6 +1,4 @@
-# dsh-auto-memory 组合包贡献的配置层。
-# insert 行的 name 在已安装形态必须是 npm 包名(Node 模块解析);
-# config 省略,全部走插件 schema 默认值(用户经 profile patch 按 id 整表覆盖)。
+# Independent WH plugin. Data defaults to $DSH_HOME/memory-wh.
 - insert:
-    - id: auto-memory
-      name: dsh-auto-memory
+    - id: auto-memory-wh
+      name: dsh-auto-memory-wh

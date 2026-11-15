@@ -6,30 +6,32 @@
  *    走 ctx.fs 会抛 FS_SANDBOX_DENIED;官方先例 skill-filesystem 访问 $DSH_HOME
  *    下的文件同样直接用 node:fs。
  * 2. **并发写用 @deepseek-ai/dsh-atomic-write**(writeFileAtomic + withFileLock),
- *    跨进程文件锁,Windows 兼容由官方包处理;孤儿锁由本层自愈(见 withLockRecovery)。
+ *    跨进程文件锁,Windows 兼容由官方包处理;残留锁须显式离线恢复。
  * 3. **MEMORY.md 是派生物**:真相源是记忆文件集;每次写入/删除后全量重建索引,
  *    删空时直接移除索引文件(保证"无记忆不出段")。
- * 4. **不写自定义会话事件**——第三方事件类型会导致会话 resume 拒读。审计走 tool/result。
+ * 4. **不写自定义会话事件**——第三方事件类型会导致会话 resume 拒读。审计走独立 audit.jsonl。
  * 5. **frontmatter 用 yaml 包解析**(skill-filesystem 同款)。
  * 6. **任何单个畸形/恶意文件都不得砖掉存储操作**:解析失败一律跳过(含不可归一化
  *    的 name),symlink 条目跳过(防止目录外内容被吸进索引注入系统提示词)。
  */
 
-import { promises as fsp, lstatSync, readFileSync } from 'node:fs'
+import { promises as fsp, lstatSync, readFileSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
-import type { MemoryEvidence, MemoryOrigin, MemoryRecord, MemoryScope, MemoryStatus, MemoryType } from './types.ts'
+import type { MemoryEvidence, MemoryOrigin, MemoryRecord, MemoryScope, MemoryStatus, MemoryType, TaskStatus } from './types.ts'
 import { USER_SCOPE_DIR } from './types.ts'
+import { recordWrite } from './metrics.ts'
+import { absoluteRoot, archiveFile, assertNoLinksSync, assertReadable, decodeImage, durableWrite, errorCode, inside, MAX_FILE_BYTES, MAX_TOTAL_BYTES, PROJECT_FILE, readRegular, sha256, withScopeTransaction, type FaultHook } from './storage-safety.ts'
 
-const MEMORY_TYPES: readonly MemoryType[] = ['user', 'feedback', 'project', 'reference'] as const
+const MEMORY_TYPES: readonly MemoryType[] = ['user', 'feedback', 'project', 'reference', 'task'] as const
 
 /** 索引文件名(派生物,随写入重建;删空时移除)。 */
 export const INDEX_FILENAME = 'MEMORY.md'
 
 /** 大小写不敏感文件系统(NTFS/APFS)上与索引文件冲突的保留名。 */
-const RESERVED_NAMES = new Set(['memory'])
+const RESERVED_NAMES = new Set(['memory', 'con', 'prn', 'aux', 'nul', ...Array.from({ length: 9 }, (_, i) => `com${i + 1}`), ...Array.from({ length: 9 }, (_, i) => `lpt${i + 1}`)])
 
 /**
  * 把会话 cwd 编码为文件系统安全的项目目录名。
@@ -86,35 +88,11 @@ export function asMemoryType(raw: string): MemoryType {
   return hit
 }
 
-/**
- * 文件锁 + 孤儿锁自愈(模块级,store 与审计共用,单一实现点):
- * 官方包设计"contender 永不移除已存在的锁,孤儿恢复是运维操作"——但交互式
- * CLI 的 Ctrl+C/崩溃会让 .lock 永久残留,砖掉此后所有写/删(审查确认的
- * major)。超时后检查锁内 pid:持有进程已死则回收锁重试一次;活进程持有则
- * 让超时错误冒泡(模型可读文案由工具层转译)。
- */
+/** Historical export name retained for audit callers. Lock reclamation is explicit offline maintenance. */
 export async function withLockRecovery<T>(lockTarget: string, operation: () => Promise<T>): Promise<T> {
-  try {
-    return await withFileLock(lockTarget, operation)
-  } catch (error) {
-    if (!/timed out waiting for the writer lock/.test(String(error))) throw error
-    const lockPath = `${lockTarget}.lock`
-    const pidRaw = await fsp.readFile(lockPath, 'utf8').catch(() => null)
-    if (pidRaw === null) throw error // 锁已消失,让调用方按原错误重试语义处理
-    const pid = Number.parseInt(pidRaw.trim(), 10)
-    if (!Number.isInteger(pid) || pid <= 0) throw error
-    let alive: boolean
-    try {
-      // Windows 上 pid 0 是 System Idle;process.kill(pid, 0) 仅探测不发送信号
-      process.kill(pid, 0)
-      alive = true
-    } catch {
-      alive = false
-    }
-    if (alive) throw error
-    await fsp.rm(lockPath, { force: true })
-    return await withFileLock(lockTarget, operation)
-  }
+  // A timeout or EPERM is not proof of death. Offline maintenance handles stale locks.
+  assertNoLinksSync(lockTarget)
+  return withFileLock(lockTarget, operation)
 }
 
 /** 解析 frontmatter(参考 skill-filesystem parseFrontmatter,容忍 CRLF)。 */
@@ -138,6 +116,18 @@ function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: s
     if (nextNewline < 0) return undefined
     lineStart = nextNewline + 1
   }
+}
+
+/** Migration is stricter than the legacy tolerant reader; no silent trust/version repair. */
+export function migrationRecordIssue(raw: string): string | undefined {
+  try {
+    const fm = parseFrontmatter(raw)
+    if (!fm) return 'invalid-frontmatter'
+    if (fm.data.schemaVersion !== undefined && fm.data.schemaVersion !== 1) return 'unsupported-record-version'
+    if (fm.data.status !== undefined && !['candidate', 'verified', 'disputed', 'superseded'].includes(String(fm.data.status))) return 'invalid-trust-status'
+    if (fm.data.origin !== undefined && parseOrigin(fm.data.origin) === undefined) return 'unrecognized-origin'
+    return undefined
+  } catch { return 'invalid-frontmatter' }
 }
 
 /**
@@ -168,6 +158,10 @@ export function contentFingerprint(fields: Pick<MemoryRecord, 'description' | 't
     .slice(0, 16)
 }
 
+export function reviewFingerprint(fields: Pick<MemoryRecord, 'name' | 'title' | 'description' | 'type' | 'body'>): string {
+  return sha256(JSON.stringify([fields.name, fields.title?.trim() ?? '', fields.description.trim(), fields.type, fields.body.trim()]))
+}
+
 /**
  * 解析单个记忆文件内容;任何畸形(含不可归一化的 name)一律返回 null,
  * 绝不抛错——单个坏文件不得砖掉 list/write/delete(审查确认的 major 修复)。
@@ -179,7 +173,7 @@ export function parseMemory(raw: string, scope: MemoryScope): MemoryRecord | nul
   try {
     const fm = parseFrontmatter(raw)
     if (!fm) return null
-    const { name, description, type, title, created, updated, lastRead, reads, pinned, importance, disabled, origin, status, evidence, supersededBy, supersedes } = fm.data
+    const { name, description, type, title, created, updated, lastRead, reads, pinned, importance, disabled, origin, status, evidence, supersededBy, supersedes, reviewHash, dueAt, remindAt, priority, taskStatus, notifySessionId, topic } = fm.data
     if (typeof name !== 'string' || typeof description !== 'string' || description.trim().length === 0) return null
     const parsedType = type === undefined ? 'reference' : asMemoryType(String(type))
     const asMs = (value: unknown): number | undefined =>
@@ -188,11 +182,27 @@ export function parseMemory(raw: string, scope: MemoryScope): MemoryRecord | nul
       typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
     const asImportance = (value: unknown): number | undefined =>
       typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= 10 ? value : undefined
+    // v0.5.0 任务字段:非法值静默丢弃(与生命周期元数据同款容错,坏 YAML 不砖存储)
+    const asTaskDue = (value: unknown): number | undefined => asMs(value)
+    const asPriority = (value: unknown): number | undefined =>
+      typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= 5 ? value : undefined
+    const asTaskStatus = (value: unknown): TaskStatus | undefined =>
+      value === 'open' || value === 'done' || value === 'cancelled' ? value : undefined
+    // v0.6.2 提醒目标会话:宿主 session id;格式不对就静默丢弃(桥接会回退 new_once)
+    const asNotifySession = (value: unknown): string | undefined =>
+      typeof value === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(value) ? value : undefined
+    // v1.0.0-rc.2 主题 id:非法值静默丢弃(旧文件/手改 YAML 不砖存储),由面板/迁移补
+    const asTopic = (value: unknown): string | undefined =>
+      typeof value === 'string' && /^[\p{L}\p{N}][\p{L}\p{N}_-]{0,31}$/u.test(value) ? value : undefined
     const parsedOrigin = parseOrigin(origin)
-    // 可信状态:非法枚举静默回退 undefined(信任态)——手改 YAML 写错不砖存储(现纪律)
-    const parsedStatus = status === 'candidate' || status === 'verified' || status === 'disputed' || status === 'superseded'
+    // 可信状态:非法枚举回退 undefined(未审核旧状态)——手改 YAML 写错不砖存储(现纪律)
+    let parsedStatus = status === 'candidate' || status === 'verified' || status === 'disputed' || status === 'superseded'
       ? (status as MemoryStatus)
       : undefined
+    let trustReason: string | undefined
+    if (parsedStatus === 'verified' && reviewHash !== reviewFingerprint({ name: normalizeName(name), description, type: parsedType, body: fm.body, title: typeof title === 'string' ? title : undefined })) {
+      parsedStatus = 'candidate'; trustReason = 'review-hash-missing-or-changed'
+    }
     // 证据链:两个成分都合法才保留(半截证据比没证据更骗人)
     const evidenceRaw = (evidence !== null && typeof evidence === 'object' && !Array.isArray(evidence)) ? evidence as Record<string, unknown> : null
     const parsedEvidence = evidenceRaw !== null
@@ -205,6 +215,10 @@ export function parseMemory(raw: string, scope: MemoryScope): MemoryRecord | nul
     const asLineage = (value: unknown): string | undefined =>
       typeof value === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) && value.length <= 64 ? value : undefined
     return {
+      revision: sha256(raw),
+      ...(typeof reviewHash === 'string' ? { reviewHash } : {}),
+      ...(trustReason ? { trustReason } : {}),
+      metadata: Object.fromEntries(Object.entries(fm.data).filter(([key]) => !['reviewHash', 'name', 'description', 'type', 'title', 'created', 'updated', 'lastRead', 'reads', 'pinned', 'importance', 'disabled', 'origin', 'status', 'evidence', 'supersededBy', 'supersedes', 'dueAt', 'remindAt', 'priority', 'taskStatus', 'notifySessionId', 'topic'].includes(key))),
       name: normalizeName(name),
       title: typeof title === 'string' && title.trim().length > 0 ? title.trim() : undefined,
       description: description.trim(),
@@ -223,6 +237,12 @@ export function parseMemory(raw: string, scope: MemoryScope): MemoryRecord | nul
       updatedMs: asMs(updated),
       lastReadMs: asMs(lastRead),
       reads: asCount(reads),
+      ...(asTaskDue(dueAt) !== undefined ? { dueAt: asTaskDue(dueAt) } : {}),
+      ...(asTaskDue(remindAt) !== undefined ? { remindAt: asTaskDue(remindAt) } : {}),
+      ...(asPriority(priority) !== undefined ? { priority: asPriority(priority) } : {}),
+      ...(asTaskStatus(taskStatus) !== undefined ? { taskStatus: asTaskStatus(taskStatus) } : {}),
+      ...(asNotifySession(notifySessionId) !== undefined ? { notifySessionId: asNotifySession(notifySessionId)! } : {}),
+      ...(asTopic(topic) !== undefined ? { topic: asTopic(topic)! } : {}),
     }
   } catch {
     return null // 坏 name/type 等统一跳过,与契约一致
@@ -232,14 +252,17 @@ export function parseMemory(raw: string, scope: MemoryScope): MemoryRecord | nul
 /** 序列化一条记忆为文件内容(frontmatter 由 yaml.stringify 正确转义特殊字符)。 */
 export function serializeMemory(record: Omit<MemoryRecord, 'scope'>): string {
   const frontmatter = stringifyYaml({
+    ...record.metadata,
     name: record.name,
     ...(record.title !== undefined ? { title: record.title } : {}),
     description: record.description,
     type: record.type,
+    ...(record.topic !== undefined ? { topic: record.topic } : {}),
+    ...(record.status === 'verified' && record.reviewHash ? { reviewHash: record.reviewHash } : {}),
     ...(record.pinned === true ? { pinned: true } : {}),
     ...(record.disabled === true ? { disabled: true } : {}),
     ...(record.importance !== undefined ? { importance: record.importance } : {}),
-    // 可信状态与证据链(1.0.0):status 缺省即信任态不落键;evidence 整块进出
+    // 可信状态与证据链(1.0.0):status 缺省为未审核旧记录，不自动注入;evidence 整块进出
     ...(record.status !== undefined ? { status: record.status } : {}),
     ...(record.evidence !== undefined ? { evidence: { sessionId: record.evidence.sessionId, quote: record.evidence.quote } } : {}),
     // #19 演化谱系(扁平两个 string;与 status 同款条件落盘)
@@ -259,6 +282,12 @@ export function serializeMemory(record: Omit<MemoryRecord, 'scope'>): string {
     ...(record.updatedMs !== undefined ? { updated: record.updatedMs } : {}),
     ...(record.lastReadMs !== undefined ? { lastRead: record.lastReadMs } : {}),
     ...(record.reads !== undefined ? { reads: record.reads } : {}),
+    // v0.5.0 任务字段:仅 type='task' 的语义字段,缺省不落盘
+    ...(record.dueAt !== undefined ? { dueAt: record.dueAt } : {}),
+    ...(record.remindAt !== undefined ? { remindAt: record.remindAt } : {}),
+    ...(record.priority !== undefined ? { priority: record.priority } : {}),
+    ...(record.taskStatus !== undefined ? { taskStatus: record.taskStatus } : {}),
+    ...(record.notifySessionId !== undefined ? { notifySessionId: record.notifySessionId } : {}),
   }).trimEnd()
   return `---\n${frontmatter}\n---\n\n${record.body.trim()}\n`
 }
@@ -294,11 +323,13 @@ export function renderIndexBody(records: MemoryRecord[]): string {
   // memory_list 与 memory_read 仍可见/可读,取消停用即恢复注入
   // 可信状态过滤(1.0.0):disputed(争议)与 superseded(被取代)不注入——
   // 与 disabled 同款"隐藏不删除"语义,文件保留、面板可见、可恢复;
-  // candidate 照常注入(固化产物零行为破坏,验证引导交给体检榜)
+  // v1.0.0-rc.10:撤销人工审核,candidate/legacy 与 verified 一样进入派生索引
   const visible = records.filter(record =>
     record.disabled !== true
     && record.status !== 'disputed'
-    && record.status !== 'superseded')
+    && record.status !== 'superseded'
+    // v0.5.0:任务不进入“长期事实”索引段,由到期提醒段/面板单独呈现
+    && record.type !== 'task')
   const ordered = [...visible].sort((a, b) => {
     const pa = a.pinned === true ? 0 : 1
     const pb = b.pinned === true ? 0 : 1
@@ -308,7 +339,9 @@ export function renderIndexBody(records: MemoryRecord[]): string {
     if (sa !== sb) return sb - sa
     return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
   })
-  const lines = ordered.map(r => `- [${r.title ?? r.name}](${r.name}.md)${r.pinned === true ? ' 📌' : ''} — ${r.description}`)
+  // v0.6.1:自动标题来自描述时(两者相同)索引仍显示名字,避免“标题+描述”重复
+  const label = (r: MemoryRecord): string => r.title !== undefined && r.title.trim() !== r.description.trim() ? r.title : r.name
+  const lines = ordered.map(r => `- [${label(r)}](${r.name}.md)${r.pinned === true ? ' 📌' : ''} — ${r.description}`)
   return lines.length > 0 ? `${lines.join('\n')}\n` : ''
 }
 
@@ -409,6 +442,16 @@ function sanitizeContent(text: string): string {
   return stripMemoryTags(redactSecrets(text))
 }
 
+/**
+ * v0.6.1 自动标题:没有显式标题时取描述首句(压缩空白、截断 60 字符),
+ * 描述为空则用名字的可读形式。标题只影响展示与审核指纹,不改变记忆语义。
+ */
+export function deriveTitle(description: string, name: string): string {
+  const firstLine = description.trim().split(/\r?\n/, 1)[0] ?? ''
+  const source = firstLine.replace(/\s+/g, ' ').trim() || name.replace(/[-_]+/g, ' ')
+  return source.length > 60 ? `${source.slice(0, 59).trimEnd()}…` : source
+}
+
 // ---------- P0.5 三因子排序(Generative Agents 公式的免 embedding 版) ----------
 
 /** 各类型缺省重要度(1-10;固化时 LLM 可显式覆盖)。 */
@@ -417,6 +460,7 @@ export const DEFAULT_IMPORTANCE: Readonly<Record<MemoryType, number>> = {
   user: 7,
   project: 6,
   reference: 4,
+  task: 6,
 }
 
 /**
@@ -443,36 +487,66 @@ export { descriptionSimilarity } from './matching.ts'
  */
 /** write 入参:origin 只提供来源三要素,内容指纹由 store 清洗后计算。 */
 export interface MemoryWriteInput extends Omit<MemoryRecord, 'scope' | 'origin'> {
+  /** Optional optimistic concurrency token; stale edits fail inside the writer lock. */
+  expectedRevision?: string
   /** 导入桥专用:目标层已有同名记忆时放弃写入(锁内判定,返回 null)。 */
   onlyIfAbsent?: boolean
   origin?: Omit<MemoryOrigin, 'hash'>
+  /** v0.5.0:显式清空任务字段(否则 undefined 会继承旧值)。 */
+  clearTaskFields?: Array<'dueAt' | 'remindAt' | 'priority' | 'taskStatus' | 'notifySessionId'>
 }
 
 export class MemoryStore {
-  constructor(rootDir: string, options?: { staleAfterDays?: number }) {
-    this.rootDir = rootDir
+  constructor(rootDir: string, options?: { staleAfterDays?: number; fault?: FaultHook }) {
+    this.rootDir = absoluteRoot(rootDir)
     this.staleAfterDays = options?.staleAfterDays ?? 0
+    this.fault = options?.fault
   }
 
   private readonly rootDir: string
+  private readonly fault?: FaultHook
+  private mutate<T>(scope: MemoryScope, cwd: string | undefined, operation: () => Promise<T>, bulk = false): Promise<T> {
+    const dir = this.dir(scope, cwd)
+    return withScopeTransaction(this.rootDir, dir, async () => {
+      if (scope === 'project') {
+        // Check again under the writer lock; two colliding project slugs cannot race to claim it.
+        this.dir(scope, cwd)
+        const file = join(dir, PROJECT_FILE)
+        try { await readRegular(file) }
+        catch (error) { if (errorCode(error) !== 'ENOENT') throw error; await durableWrite(file, JSON.stringify({ version: 1, cwd: resolve(cwd!) }) + '\n') }
+      }
+      return operation()
+    }, { bulk, fault: this.fault })
+  }
   /** 软淘汰阈值(天);0 = 禁用。索引重建时评估:陈旧零引用的记忆从索引隐藏(文件保留)。 */
   private readonly staleAfterDays: number
 
   /** 作用域对应目录;project 作用域必须携带会话 cwd(绝不静默回退 process.cwd())。 */
   dir(scope: MemoryScope, cwd?: string): string {
+    if (scope !== 'user' && scope !== 'project') throw new Error('Invalid memory scope')
     if (scope === 'user') return join(this.rootDir, USER_SCOPE_DIR)
     if (cwd === undefined) throw new Error('project scope requires a session cwd (refusing to fall back to process.cwd())')
-    return join(this.rootDir, projectKey(cwd))
+    const dir = join(this.rootDir, projectKey(cwd))
+    assertNoLinksSync(dir)
+    try {
+      assertNoLinksSync(join(dir, PROJECT_FILE))
+      const mapping = JSON.parse(readFileSync(join(dir, PROJECT_FILE), 'utf8'))
+      const canonical = (s: string): string => process.platform === 'win32' ? resolve(s).toLowerCase() : resolve(s)
+      if (mapping.version !== 1 || typeof mapping.cwd !== 'string' || canonical(mapping.cwd) !== canonical(cwd)) throw new Error('Project directory collision: explicit remapping required')
+    } catch (error) { if (errorCode(error) !== 'ENOENT') throw error }
+    return dir
   }
 
   /** 列出指定作用域全部记忆(畸形文件与 symlink 跳过;按 name 稳定排序)。 */
   async list(scope: MemoryScope, cwd?: string): Promise<MemoryRecord[]> {
     const dir = this.dir(scope, cwd)
+    assertReadable(this.rootDir, dir)
     let dirents
     try {
       dirents = await fsp.readdir(dir, { withFileTypes: true })
-    } catch {
-      return [] // 目录不存在 = 无记忆
+    } catch (error) {
+      if (errorCode(error) === 'ENOENT') return []
+      throw error
     }
     const records: MemoryRecord[] = []
     for (const dirent of dirents) {
@@ -480,7 +554,7 @@ export class MemoryStore {
       if (dirent.name.toLowerCase() === INDEX_FILENAME.toLowerCase()) continue
       const file = join(dir, dirent.name)
       if (isSymlink(file)) continue
-      const raw = await fsp.readFile(file, 'utf8').catch(() => null)
+      const raw = await readRegular(file).then(data => data.toString('utf8'))
       const record = raw === null ? null : parseMemory(raw, scope)
       if (record) records.push(record)
     }
@@ -489,9 +563,10 @@ export class MemoryStore {
 
   /** 读单条记忆;不存在/为 symlink/畸形返回 null。 */
   async read(name: string, scope: MemoryScope, cwd?: string): Promise<MemoryRecord | null> {
+    assertReadable(this.rootDir, this.dir(scope, cwd))
     const file = join(this.dir(scope, cwd), `${normalizeName(name)}.md`)
     if (isSymlink(file)) return null
-    const raw = await fsp.readFile(file, 'utf8').catch(() => null)
+    const raw = await readRegular(file).then(data => data.toString('utf8')).catch(error => { if (errorCode(error) === 'ENOENT') return null; throw error })
     return raw === null ? null : parseMemory(raw, scope)
   }
 
@@ -512,20 +587,34 @@ export class MemoryStore {
   /**
    * 写入(同名覆盖=更新),并在文件锁内重建该作用域索引。
    * 锁对象是索引文件:同一 workspace 的写/删串行化,跨进程安全;
-   * 孤儿锁(Ctrl+C/崩溃残留)自动回收(见 withLockRecovery)。
+   * 根锁与作用域恢复日志串行化修改;残留锁通过离线维护处理。
    */
   async write(record: MemoryWriteInput, scope: MemoryScope, cwd?: string): Promise<MemoryRecord | null> {
+    const started = Date.now()
+    let failure: unknown
+    try {
+      return await this.writeInternal(record, scope, cwd)
+    } catch (error) {
+      failure = error
+      throw error
+    } finally {
+      recordWrite(Date.now() - started, failure)
+    }
+  }
+
+  private async writeInternal(record: MemoryWriteInput, scope: MemoryScope, cwd?: string): Promise<MemoryRecord | null> {
+    if (normalizeName(record.name) !== record.name) throw new Error('Store writes require a canonical memory name')
+    if (Buffer.byteLength(JSON.stringify(record), 'utf8') > MAX_FILE_BYTES / 2) throw new Error('Record exceeds write size limit')
     const dir = this.dir(scope, cwd)
     const file = join(dir, `${record.name}.md`)
     // withFileLock 要求父目录已存在,先建目录再取锁
-    await fsp.mkdir(dir, { recursive: true, mode: 0o700 })
     let written: MemoryRecord | undefined
-    await withLockRecovery(join(dir, INDEX_FILENAME), async () => {
+    await this.mutate(scope, cwd, async () => {
       // 锁内读旧记录拿生命周期基线(created/读取计数跨更新保留)
-      const existing = parseMemory(
-        await fsp.readFile(file, 'utf8').catch(() => ''),
-        scope,
-      )
+      const raw = await readRegular(file).then(data => data.toString('utf8')).catch(error => { if (errorCode(error) === 'ENOENT') return null; throw error })
+      const existing = raw === null ? null : parseMemory(raw, scope)
+      if (raw !== null && existing === null) throw new Error('Existing malformed record cannot be overwritten')
+      if (record.expectedRevision !== undefined && record.expectedRevision !== existing?.revision) throw new Error('Revision conflict: reload before editing')
       // onlyIfAbsent(导入桥):同名判定下沉锁内,杜绝锁外快照的 TOCTOU
       // (导入期间并发写入的同名记忆会被覆盖);命中即放弃本次写入,返回 null
       // 固化候选显式带 status(sanitize 恒带 candidate)不允许复活 superseded
@@ -537,7 +626,7 @@ export class MemoryStore {
       //   人工流转入口;固化候选自带 candidate/disputed)
       // - 调用方未传且内容相对 existing **发生变化** → 信任重评:
       //   verified/candidate 降回 candidate(内容变了,旧验证不覆盖新内容);
-      //   undefined(用户手写信任态)保持;disputed/superseded 保留(fail-closed)
+      //   undefined(旧文件)改为 candidate;disputed/superseded 保留(fail-closed)
       //   同时旧 evidence 失效(逐字引用罩不住新内容)
       // - 内容未变(纯 echo 刷新/置顶停用等元数据写) → 原样继承,verified
       //   不被常规流量冲掉(审查 major:复述刷新剥验证)
@@ -546,13 +635,32 @@ export class MemoryStore {
       const pinned = record.pinned ?? existing?.pinned
       const disabled = record.disabled ?? existing?.disabled
       const importance = record.importance ?? existing?.importance
-      const title = record.title ?? existing?.title
+      // v0.5.0 任务字段:更新时缺省继承(纯内容更新/置顶停用不得清掉任务元数据);
+      // clearTaskFields 显式清空,优先于继承(含“取消截止时间”这类编辑)
+      const cleared = record.clearTaskFields ?? []
+      const dueAt = cleared.includes('dueAt') ? undefined : record.dueAt ?? existing?.dueAt
+      const remindAt = cleared.includes('remindAt') ? undefined : record.remindAt ?? existing?.remindAt
+      const priority = cleared.includes('priority') ? undefined : record.priority ?? existing?.priority
+      const taskStatus = cleared.includes('taskStatus') ? undefined : record.taskStatus ?? existing?.taskStatus
+      const notifySessionId = cleared.includes('notifySessionId') ? undefined : record.notifySessionId ?? existing?.notifySessionId
+      if (notifySessionId !== undefined && !/^[A-Za-z0-9_-]{1,80}$/.test(notifySessionId)) throw new Error('Invalid task notifySessionId: expected a host session id')
+      for (const [field, value] of [['dueAt', dueAt], ['remindAt', remindAt]] as const) {
+        if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) throw new Error(`Invalid task ${field}: expected a positive epoch-ms integer`)
+      }
+      if (priority !== undefined && (!Number.isSafeInteger(priority) || priority < 1 || priority > 5)) throw new Error('Invalid task priority: expected 1-5')
+      if (taskStatus !== undefined && taskStatus !== 'open' && taskStatus !== 'done' && taskStatus !== 'cancelled') throw new Error('Invalid task status')
       // 安全包:所有写入路径统一过脱敏 + 协议标签防护(单点拦截,含 title——
       // title 进索引行即注入内容,绕过即穿透壳/泄密,审查 blocker)
       const description = sanitizeContent(record.description)
       const body = sanitizeContent(record.body)
+      // v0.6.1:标题缺省时自动生成,不要求用户先起名(取描述首句,必要时退回名字)
+      const explicitTitle = record.title ?? existing?.title
+      const title = explicitTitle ?? deriveTitle(description, record.name)
+      // v1.0.0-rc.2 主题：更新时缺省继承；显式传空串表示清除（仅迁移/修数据用）
+      const topic = record.topic === '' ? undefined : record.topic ?? existing?.topic
+      if (topic !== undefined && !/^[\p{L}\p{N}][\p{L}\p{N}_-]{0,31}$/u.test(topic)) throw new Error('Invalid memory topic: expected a topic id')
       const contentChanged = existing !== null
-        && (existing.description !== description || existing.body !== body || existing.type !== record.type)
+        && (existing.description !== description || existing.body !== body || existing.type !== record.type || (existing.title ?? '') !== (title === undefined ? '' : sanitizeContent(title)))
       // #19 superseded 复活守卫(审查 major):固化候选(sanitize 恒带 status
       // 'candidate')不允许覆写 superseded 文件——create 路径的同名候选会把它
       // 复活重新注入,与谱系语义矛盾。superseded 只能经用户面板显式 restore
@@ -560,7 +668,7 @@ export class MemoryStore {
       // 是显式传值(record.status !== undefined),不受此守卫影响——守卫只拦
       // "status === 'candidate' 且内容变化"的固化形态。
       if (existing?.status === 'superseded' && record.status === 'candidate' && contentChanged) return
-      let status = record.status ?? existing?.status
+      let status = record.status ?? existing?.status ?? 'candidate'
       if (record.status === undefined && contentChanged) {
         if (existing?.status === 'verified' || existing?.status === 'candidate') status = 'candidate'
       }
@@ -583,9 +691,13 @@ export class MemoryStore {
         ? { ...record.origin, hash: contentFingerprint({ description, type: record.type, body }) }
         : existing?.origin
       // origin/onlyIfAbsent 是 write 入参专用字段,不落盘;先剥离再展开
-      const fields: Omit<MemoryRecord, 'scope' | 'origin'> = record
+      const fields: Omit<MemoryRecord, 'scope' | 'origin'> = { ...record }
+      // 清空字段必须先从未归一化的拷贝里删掉,否则下面的展开会把旧值带回 next
+      for (const field of cleared) delete (fields as Record<string, unknown>)[field]
+      delete (fields as MemoryRecord & { clearTaskFields?: unknown }).clearTaskFields
       const next: MemoryRecord = {
         ...fields,
+        metadata: { ...existing?.metadata, ...record.metadata },
         ...(pinned === true ? { pinned: true } : {}),
         ...(disabled === true ? { disabled: true } : {}),
         ...(importance !== undefined ? { importance } : {}),
@@ -594,6 +706,12 @@ export class MemoryStore {
         ...(supersededBy !== undefined ? { supersededBy } : {}),
         ...(supersedes !== undefined ? { supersedes } : {}),
         ...(title !== undefined ? { title: sanitizeContent(title) } : {}),
+        ...(dueAt !== undefined ? { dueAt } : {}),
+        ...(remindAt !== undefined ? { remindAt } : {}),
+        ...(priority !== undefined ? { priority } : {}),
+        ...(taskStatus !== undefined ? { taskStatus } : {}),
+        ...(notifySessionId !== undefined ? { notifySessionId } : {}),
+        ...(topic !== undefined ? { topic } : {}),
         description,
         body,
         ...(origin !== undefined ? { origin } : {}),
@@ -604,8 +722,23 @@ export class MemoryStore {
         ...(record.updatedMs !== undefined ? { updatedMs: record.updatedMs } : {}),
         scope,
       }
+      // v1.0.0-rc.2:清除主题时不能把空串落盘（fields 展开会带回入参）
+      if (topic === undefined) delete (next as MemoryRecord & { topic?: string }).topic
+      // 非任务类型不得携带任务字段(类型切换时清理,保持文件语义单一)
+      if (next.type !== 'task') {
+        delete next.dueAt
+        delete next.remindAt
+        delete next.priority
+        delete next.taskStatus
+        delete next.notifySessionId
+      }
+      // 内部指令字段不进入记录本体(避免经 API/工具回显再次进入写入路径)
+      delete (next as MemoryRecord & { clearTaskFields?: unknown }).clearTaskFields
       written = next
-      await writeFileAtomic(file, serializeMemory(next), { mode: 0o600, dirMode: 0o700 })
+      next.reviewHash = status === 'verified' ? (record.status === 'verified' ? reviewFingerprint(next) : existing?.reviewHash) : undefined
+      const serialized = serializeMemory(next)
+      next.revision = sha256(serialized)
+      await writeFileAtomic(file, serialized, { mode: 0o600, dirMode: 0o700 })
       await this.rebuildIndex(scope, cwd)
     })
     // onlyIfAbsent 命中(锁内提前 return)时 written 未赋值 → null 表示未写入
@@ -621,7 +754,7 @@ export class MemoryStore {
       const dir = this.dir(scope, cwd)
       const file = join(dir, `${normalizeName(name)}.md`)
       if (!(await fsp.stat(file).then(() => true, () => false))) return
-      await withLockRecovery(join(dir, INDEX_FILENAME), async () => {
+      await this.mutate(scope, cwd, async () => {
         const record = parseMemory(await fsp.readFile(file, 'utf8').catch(() => ''), scope)
         if (record === null) return
         // 仅当旧记录当前处于"零引用超龄"隐藏态(本次计数会使其复活)才重建索引;
@@ -643,119 +776,233 @@ export class MemoryStore {
     }
   }
 
-  /**
-   * 清空一个作用域的全部记忆(含索引);返回真实删除条数。
-   * 整个删除在单个锁窗口内完成(审查 major 修复:快照-逐条删除会让并发 write
-   * 逃过"Delete ALL"语义——同 workspace 的自动固化/另一会话写入会残留),
-   * 单条失败跳过并如实计数,不虚报。
-   */
+  /** Archive a whole scope atomically, retaining a separate pre-batch snapshot. */
   async clear(scope: MemoryScope, cwd?: string): Promise<number> {
     const dir = this.dir(scope, cwd)
-    let removed = 0
-    try {
-      await withLockRecovery(join(dir, INDEX_FILENAME), async () => {
-        let entries: string[]
-        try {
-          entries = await fsp.readdir(dir)
-        } catch {
-          return // 目录不存在 = 无记忆
-        }
-        for (const entry of entries) {
-          if (!entry.endsWith('.md')) continue // 跳过 .lock/.tmp 及无关文件
-          if (entry.toLowerCase() === INDEX_FILENAME.toLowerCase()) continue
-          try {
-            await fsp.unlink(join(dir, entry))
-            removed += 1
-          } catch {
-            // 单条失败(占用/权限)跳过,如实计数
-          }
-        }
-        await fsp.rm(join(dir, INDEX_FILENAME), { force: true })
-      })
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') return removed
-      throw error
-    }
-    return removed
+    return this.mutate(scope, cwd, async () => {
+      let removed = 0
+      for (const name of await fsp.readdir(dir)) {
+        if (!name.toLowerCase().endsWith('.md') || name.toLowerCase() === INDEX_FILENAME.toLowerCase()) continue
+        if (await archiveFile(dir, name)) removed++
+      }
+      await this.rebuildIndex(scope, cwd)
+      return removed
+    }, true)
   }
 
-  /**
-   * 带锁重算一次索引(会话启动挂点用):软淘汰是惰性评估,无新写入的仓库
-   * 需要外部触发刷新,否则 staleAfterDays 永不兑现(审查 major 修复)。静默失败。
-   */
   async refreshIndex(scope: MemoryScope, cwd?: string): Promise<void> {
     const dir = this.dir(scope, cwd)
-    const dirExists = await fsp.stat(dir).then(() => true, () => false)
-    if (!dirExists) return
-    await withLockRecovery(join(dir, INDEX_FILENAME), () => this.rebuildIndex(scope, cwd))
-      .catch(() => {}) // 刷新失败不阻塞任何路径
+    if (!await fsp.lstat(dir).then(() => true, error => { if (errorCode(error) === 'ENOENT') return false; throw error })) return
+    await this.mutate(scope, cwd, () => this.rebuildIndex(scope, cwd))
   }
 
-  /** 删除单条并重建索引;不存在/目录消失返回 false。 */
+  /** Deleted bytes and metadata remain in .archive, excluded from normal reads. */
   async delete(name: string, scope: MemoryScope, cwd?: string): Promise<boolean> {
+    const filename = normalizeName(name) + '.md'
+    return this.mutate(scope, cwd, async () => {
+      const removed = await archiveFile(this.dir(scope, cwd), filename)
+      if (removed) await this.rebuildIndex(scope, cwd)
+      return removed
+    })
+  }
+
+  async deleteIf(name: string, scope: MemoryScope, cwd: string | undefined, predicate: (record: MemoryRecord) => boolean): Promise<boolean> {
+    return this.mutate(scope, cwd, async () => {
+      const record = await this.read(name, scope, cwd)
+      if (record === null || !predicate(record)) return false
+      const removed = await archiveFile(this.dir(scope, cwd), normalizeName(name) + '.md')
+      if (removed) await this.rebuildIndex(scope, cwd)
+      return removed
+    })
+  }
+
+  /** Re-evaluate selection under the lock; any failure rolls the entire scope back. */
+  async prune(olderThanDays: number, scope: MemoryScope, cwd?: string, now = Date.now()): Promise<number> {
+    if (!Number.isSafeInteger(olderThanDays) || olderThanDays < 1) throw new Error('Invalid prune age')
+    return this.mutate(scope, cwd, async () => {
+      let removed = 0
+      for (const record of await this.list(scope, cwd)) {
+        const updated = record.updatedMs ?? record.createdMs
+        if (updated === undefined || Math.floor((now - updated) / 86_400_000) < olderThanDays) continue
+        if (await archiveFile(this.dir(scope, cwd), record.name + '.md')) removed++
+      }
+      await this.rebuildIndex(scope, cwd)
+      return removed
+    }, true)
+  }
+
+  async listArchive(scope: MemoryScope, cwd?: string): Promise<Array<{ id: string; name: string; deletedAt: string; hash: string }>> {
     const dir = this.dir(scope, cwd)
-    const file = join(dir, `${normalizeName(name)}.md`)
-    let removed = false
-    try {
-      await withLockRecovery(join(dir, INDEX_FILENAME), async () => {
-        try {
-          await fsp.unlink(file)
-        } catch {
-          removed = false
-          return
-        }
-        removed = true
-        await this.rebuildIndex(scope, cwd)
-      })
-    } catch (error) {
-      // 目录在 stat 与取锁之间被外部删除:归一化为"无记忆可删"
-      if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') return false
-      throw error
+    assertReadable(this.rootDir, dir)
+    const archive = inside(dir, '.archive')
+    const names = await fsp.readdir(archive).catch(error => { if (errorCode(error) === 'ENOENT') return []; throw error })
+    const result = []
+    for (const name of names.sort()) {
+      if (!/^[0-9a-f-]{36}\.json$/.test(name)) throw new Error('Unexpected archive entry')
+      const item = JSON.parse((await readRegular(inside(archive, name), MAX_FILE_BYTES * 2)).toString('utf8'))
+      if (item.version !== 1 || name !== item.id + '.json' || typeof item.deletedAt !== 'string') throw new Error('Invalid archive')
+      decodeImage(item.file)
+      result.push({ id: item.id, name: item.file.path, deletedAt: item.deletedAt, hash: item.file.hash })
     }
-    return removed
+    return result
+  }
+
+  async listBackups(scope: MemoryScope, cwd?: string): Promise<Array<{ file: string; hash: string }>> {
+    const dir = this.dir(scope, cwd)
+    assertReadable(this.rootDir, dir)
+    const backup = inside(dir, '.backups')
+    const names = await fsp.readdir(backup).catch(error => { if (errorCode(error) === 'ENOENT') return []; throw error })
+    const result = []
+    for (const name of names.sort()) {
+      if (!/^[0-9a-f-]{36}\.json$/.test(name)) throw new Error('Unexpected backup entry')
+      const file = inside(backup, name)
+      result.push({ file, hash: sha256(await readRegular(file, MAX_TOTAL_BYTES * 2)) })
+    }
+    return result
+  }
+
+  /** Human-management path: compare the exact reviewed revision under the writer lock. */
+  async review(name: string, scope: MemoryScope, cwd: string | undefined, expectedRevision: string, status: MemoryStatus): Promise<MemoryRecord> {
+    const current = await this.read(name, scope, cwd)
+    if (!current) throw new Error('NOT_FOUND')
+    const result = await this.write({ ...current, origin: undefined, status, expectedRevision }, scope, cwd)
+    if (!result) throw new Error('Review rejected')
+    return result
   }
 
   /**
-   * 条件删除:锁内重新解析记录并执行 predicate,满足才 unlink + 重建索引。
-   * 撤销导入专用——"来源匹配 + 内容指纹未变"的判定与删除必须在同一锁窗口内,
-   * 否则扫描与删除之间的编辑会被静默抹掉(与 onlyIfAbsent 同一套 TOCTOU 纪律)。
-   * 文件不存在/被并发删除返回 false。
+   * 标记一条记录被同 scope 的另一条取代：来源转 superseded 并写 supersededBy 回链，
+   * 继任者补 supersedes 前链；两条记录都保留，可沿链恢复。不做删除、不自动合并。
    */
-  async deleteIf(
-    name: string,
-    scope: MemoryScope,
-    cwd: string | undefined,
-    predicate: (record: MemoryRecord) => boolean,
-  ): Promise<boolean> {
-    const dir = this.dir(scope, cwd)
-    const file = join(dir, `${normalizeName(name)}.md`)
-    let removed = false
-    try {
-      await withLockRecovery(join(dir, INDEX_FILENAME), async () => {
-        const record = parseMemory(await fsp.readFile(file, 'utf8').catch(() => ''), scope)
-        if (record === null || !predicate(record)) return
-        try {
-          await fsp.unlink(file)
-        } catch {
-          return
-        }
-        removed = true
-        await this.rebuildIndex(scope, cwd)
-      })
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') return false
-      throw error
-    }
-    return removed
+  async supersede(name: string, scope: MemoryScope, cwd: string | undefined, expectedRevision: string, successorName: string): Promise<{ source: MemoryRecord; successor: MemoryRecord }> {
+    const canonical = normalizeName(name)
+    const successor = normalizeName(successorName)
+    if (successor === canonical) throw new Error('Cannot supersede a record with itself')
+    const source = await this.read(canonical, scope, cwd)
+    if (!source) throw new Error('NOT_FOUND')
+    if (source.revision !== expectedRevision) throw new Error('Revision conflict: reload before superseding')
+    if (source.status === 'superseded' || source.supersededBy !== undefined) throw new Error('Record is already superseded')
+    const target = await this.read(successor, scope, cwd)
+    if (!target) throw new Error('SUCCESSOR_NOT_FOUND')
+    if (target.status === 'superseded' || target.supersededBy !== undefined) throw new Error('Successor is itself superseded')
+
+    await this.write({ ...source, origin: undefined, status: 'superseded', supersededBy: successor, expectedRevision }, scope, cwd)
+    await this.write({ ...target, origin: undefined, supersedes: canonical, expectedRevision: target.revision }, scope, cwd)
+    const updatedSource = await this.read(canonical, scope, cwd)
+    const updatedTarget = await this.read(successor, scope, cwd)
+    if (!updatedSource || !updatedTarget) throw new Error('Supersede write not visible')
+    return { source: updatedSource, successor: updatedTarget }
   }
 
-  /**
-   * 带孤儿锁自愈的文件锁:官方包设计"contender 永不移除已存在的锁,孤儿恢复是
-   * 运维操作"——但交互式 CLI 的 Ctrl+C/崩溃会让 .lock 永久残留,砖掉此后所有
-   * 写/删(审查确认的 major)。此处超时后检查锁内 pid:持有进程已死则回收重试一次。
-   */
-  /** 全量重建指定作用域的 MEMORY.md(须持锁调用);删空时移除索引文件。
-   *  软淘汰:staleAfterDays>0 时,陈旧零引用的记忆不进索引(文件保留,memory_list 可见)。 */
+  async deleteVersioned(name: string, scope: MemoryScope, cwd: string | undefined, expectedRevision: string): Promise<{ archiveId: string }> {
+    return this.mutate(scope, cwd, async () => {
+      const record = await this.read(name, scope, cwd)
+      if (!record) throw new Error('NOT_FOUND')
+      if (record.revision !== expectedRevision) throw new Error('Revision conflict: reload before deleting')
+      const before = new Set((await this.listArchive(scope, cwd)).map(a => a.id))
+      await archiveFile(this.dir(scope, cwd), normalizeName(name) + '.md')
+      await this.rebuildIndex(scope, cwd)
+      const archive = (await this.listArchive(scope, cwd)).find(a => !before.has(a.id))
+      if (!archive) throw new Error('Archive not found after deletion')
+      return { archiveId: archive.id }
+    })
+  }
+
+  /** Read current source records, never trust a cached/hand-edited MEMORY.md for injection. */
+  scanSync(scope: MemoryScope, cwd?: string): { records: MemoryRecord[]; issues: string[] } {
+    const records: MemoryRecord[] = [], issues: string[] = []
+    try {
+      const dir = this.dir(scope, cwd)
+      assertReadable(this.rootDir, dir)
+        const markerFile = inside(this.rootDir, '.wh-format.json')
+        const markerStat = lstatSync(markerFile)
+        if (!markerStat.isFile() || markerStat.size > 4096) throw new Error('INCOMPATIBLE_SCHEMA')
+        const marker = JSON.parse(readFileSync(markerFile, 'utf8'))
+        if (marker.format !== 'dsh-auto-memory-wh' || marker.version !== 1) throw new Error('INCOMPATIBLE_SCHEMA')
+      let total = 0
+      const entries = readdirSync(dir, { withFileTypes: true })
+      if (entries.length > 8192) throw new Error('QUOTA_EXCEEDED')
+      for (const entry of entries) {
+        if (!entry.name.endsWith('.md') || entry.name.toLowerCase() === INDEX_FILENAME.toLowerCase()) continue
+        if (!entry.isFile()) { issues.push('unsafe-file'); continue }
+        const file = inside(dir, entry.name), stat = lstatSync(file)
+        if (stat.size > MAX_FILE_BYTES || (total += stat.size) > MAX_TOTAL_BYTES) throw new Error('QUOTA_EXCEEDED')
+        const raw = readFileSync(file, 'utf8')
+        const record = parseMemory(raw, scope)
+        if (!record || record.name + '.md' !== entry.name) { issues.push('invalid-record'); continue }
+        records.push(record)
+      }
+      return { records, issues }
+    } catch (error) {
+      if (errorCode(error) === 'ENOENT') return { records: [], issues: [] }
+      return { records: [], issues: ['storage-unavailable'] }
+    }
+  }
+
+  /** Bounded concurrent source scan used by the asynchronous prompt assembly path. */
+  async scanAsync(scope: MemoryScope, cwd?: string): Promise<{ records: MemoryRecord[]; issues: string[] }> {
+    let directoryListed = false
+    try {
+      const dir = this.dir(scope, cwd)
+      assertReadable(this.rootDir, dir)
+      const markerFile = inside(this.rootDir, '.wh-format.json')
+      const markerBytes = await readRegular(markerFile, 4096)
+      const marker = JSON.parse(markerBytes.toString('utf8'))
+      if (marker.format !== 'dsh-auto-memory-wh' || marker.version !== 1) throw new Error('INCOMPATIBLE_SCHEMA')
+      const entries = await fsp.readdir(dir, { withFileTypes: true })
+      directoryListed = true
+      if (entries.length > 8192) throw new Error('QUOTA_EXCEEDED')
+      const selected = entries.filter(entry => entry.name.endsWith('.md') && entry.name.toLowerCase() !== INDEX_FILENAME.toLowerCase())
+      const items: Array<{ record?: MemoryRecord; issue?: string; bytes?: number }> = Array(selected.length)
+      let next = 0
+      const workers = await Promise.allSettled(Array.from({ length: Math.min(16, selected.length) }, async () => {
+        for (;;) {
+          const index = next++
+          if (index >= selected.length) return
+          const entry = selected[index]
+          if (!entry.isFile()) { items[index] = { issue: 'unsafe-file' }; continue }
+          const data = await readRegular(inside(dir, entry.name), MAX_FILE_BYTES)
+          const record = parseMemory(data.toString('utf8'), scope)
+          items[index] = record && record.name + '.md' === entry.name
+            ? { record, bytes: data.length } : { issue: 'invalid-record', bytes: data.length }
+        }
+      }))
+      const failure = workers.find((worker): worker is PromiseRejectedResult => worker.status === 'rejected')
+      if (failure) throw failure.reason
+      const total = items.reduce((sum, item) => sum + (item.bytes ?? 0), 0)
+      if (total > MAX_TOTAL_BYTES) throw new Error('QUOTA_EXCEEDED')
+      assertReadable(this.rootDir, dir)
+      const currentMarker = await readRegular(markerFile, 4096)
+      if (!currentMarker.equals(markerBytes)) throw new Error('INCOMPATIBLE_SCHEMA')
+      const currentEntries = await fsp.readdir(dir)
+      const beforeNames = entries.map(entry => entry.name).sort()
+      if (currentEntries.length !== beforeNames.length || currentEntries.sort().some((name, index) => name !== beforeNames[index])) throw new Error('STORAGE_CHANGED')
+      return { records: items.flatMap(item => item.record ? [item.record] : []), issues: items.flatMap(item => item.issue ? [item.issue] : []) }
+    } catch (error) {
+      if (!directoryListed && errorCode(error) === 'ENOENT') return { records: [], issues: [] }
+      return { records: [], issues: ['storage-unavailable'] }
+    }
+  }
+
+  /** Never overwrite a newer record. Raw bytes, unknown metadata and trust are retained. */
+  async restoreArchived(id: string, scope: MemoryScope, cwd?: string, expectedHash?: string): Promise<void> {
+    if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error('Invalid archive ID')
+    const dir = this.dir(scope, cwd)
+    await this.mutate(scope, cwd, async () => {
+      const item = JSON.parse((await readRegular(inside(dir, '.archive/' + id + '.json'), MAX_FILE_BYTES * 2)).toString('utf8'))
+      if (item.version !== 1 || item.id !== id || !/^[a-z0-9-]+\.md$/.test(item.file?.path)) throw new Error('Invalid archive')
+      if (expectedHash !== undefined && item.file.hash !== expectedHash) throw new Error('Restore conflict: archive changed')
+      const data = decodeImage(item.file)
+      if (parseMemory(data.toString('utf8'), scope) === null) throw new Error('Malformed archive requires manual review')
+      const file = inside(dir, item.file.path)
+      if (await fsp.lstat(file).then(() => true, error => { if (errorCode(error) === 'ENOENT') return false; throw error })) throw new Error('Restore conflict: current record exists')
+      await durableWrite(file, data)
+      await this.rebuildIndex(scope, cwd)
+      // Retain archive as recovery history; a repeated restore conflicts instead of duplicating.
+    })
+  }
+
+  /** Derived index is part of the same scope transaction. */
   private async rebuildIndex(scope: MemoryScope, cwd?: string): Promise<void> {
     const dir = this.dir(scope, cwd)
     const records = await this.list(scope, cwd)
@@ -774,13 +1021,8 @@ export class MemoryStore {
    * 文件缺失/symlink/损坏返回 null。
    */
   readIndexSync(scope: MemoryScope, cwd?: string): string | null {
-    const file = join(this.dir(scope, cwd), INDEX_FILENAME)
-    if (isSymlink(file)) return null
-    try {
-      const text = readFileSync(file, 'utf8')
-      return text.trim().length > 0 ? text : null
-    } catch {
-      return null
-    }
+    const scan = this.scanSync(scope, cwd)
+    const text = renderIndexBody(scan.records.filter(r => !isStale(r, this.staleAfterDays, Date.now())))
+    return text.trim() ? text : null
   }
 }

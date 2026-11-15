@@ -1,3 +1,4 @@
+import { ReviewedFixtureStore as MemoryStore, renderReviewedIndexBody as renderIndexBody } from './helpers/reviewed-store.ts'
 /**
  * 存储层纯逻辑测试:不依赖任何 dsh 包,全平台可跑(vitest)。
  * 外部世界断言原则(docs/testing 规则):重新读磁盘文件,不查对象内部状态。
@@ -10,10 +11,12 @@ import { promises as fsp } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
-  MemoryStore, INDEX_FILENAME, isStale, mergeLifecycleMeta, normalizeName, parseMemory, projectKey, serializeMemory, renderIndexBody,
+  MemoryStore as OriginalMemoryStore, INDEX_FILENAME, isStale, mergeLifecycleMeta, normalizeName, parseMemory, projectKey, serializeMemory, renderIndexBody as originalRenderIndexBody,
   redactSecrets, stripMemoryTags, memoryScore, descriptionSimilarity, contentFingerprint,
 } from '../src/store.ts'
 import type { MemoryRecord } from '../src/types.ts'
+import { releaseStaleLock } from '../src/maintenance.ts'
+import { sha256 } from '../src/storage-safety.ts'
 
 const CWD = 'D:\\work\\my project'
 
@@ -22,6 +25,8 @@ let store: MemoryStore
 
 beforeEach(async () => {
   root = await fsp.mkdtemp(join(tmpdir(), 'dsh-auto-memory-'))
+  // Fixtures below deliberately edit files directly; mark them as WH-format synthetic stores.
+  await fsp.writeFile(join(root, '.wh-format.json'), JSON.stringify({ format: 'dsh-auto-memory-wh', version: 1 }))
   store = new MemoryStore(root)
 })
 
@@ -76,7 +81,7 @@ describe('frontmatter 往返', () => {
       body: '正文事实,含 [[id-generator-benchmark]] 链接。',
     }
     const parsed = parseMemory(serializeMemory(record), 'user')
-    expect(parsed).toEqual({ ...record, scope: 'user' })
+    expect(parsed).toEqual({ ...record, scope: 'user', metadata: {}, revision: sha256(serializeMemory(record)) })
   })
   it('无 title 的旧文件仍可解析', () => {
     const parsed = parseMemory(serializeMemory({ name: 'a', description: 'd', type: 'user', body: 'b' }), 'project')
@@ -185,11 +190,14 @@ describe('MemoryStore CRUD 与索引', () => {
     expect(store.readIndexSync('project', CWD)).toContain('two')
   })
 
-  it('孤儿锁自愈:残留死进程 pid 的 .lock 不砖写入(审查 major 回归)', async () => {
+  it('残留锁阻止写入，核验停写与锁指纹后可显式恢复', async () => {
     const dir = join(root, projectKey(CWD))
     await fsp.mkdir(dir, { recursive: true })
     // 伪造官方锁格式:内容为持有进程 pid;99999999 大概率不存在
     await fsp.writeFile(join(dir, `${INDEX_FILENAME}.lock`), '99999999\n', { flag: 'wx' })
+    await expect(store.write({ name: 'after-orphan', description: 'd', type: 'user', body: 'x' }, 'project', CWD)).rejects.toThrow(/writer lock/)
+    expect(await fsp.readFile(join(dir, `${INDEX_FILENAME}.lock`), 'utf8')).toBe('99999999\n')
+    await releaseStaleLock({ root, lock: projectKey(CWD) + '/MEMORY.md.lock', expectedHash: sha256('99999999\n'), writersStopped: true })
     await store.write({ name: 'after-orphan', description: 'd', type: 'user', body: 'x' }, 'project', CWD)
     expect(await store.read('after-orphan', 'project', CWD)).not.toBeNull()
     // 操作完成后锁被释放
@@ -417,14 +425,15 @@ describe('P1:生命周期元数据与遗忘', () => {
       store.clear('project', CWD),
       store.write({ name: 'late', description: 'late', type: 'user', body: 'x' }, 'project', CWD),
     ])
-    expect(cleared).toBe(3)
+    expect([3, 4]).toContain(cleared)
     const remaining = await store.list('project', CWD)
     // 终态一致:要么全空(write 先入且被删),要么只剩 late 且索引正确反映
     const names = remaining.map(r => r.name)
-    if (names.length > 0) {
+    if (cleared === 3) {
       expect(names).toEqual(['late'])
       expect(store.readIndexSync('project', CWD)).toContain('late')
     } else {
+      expect(names).toEqual([])
       expect(store.readIndexSync('project', CWD)).toBeNull()
     }
   })
@@ -448,8 +457,8 @@ describe('P1:生命周期元数据与遗忘', () => {
     const raw = await fsp.readFile(join(dir, 'old.md'), 'utf8')
     const ancient = Date.now() - 200 * 86_400_000
     await fsp.writeFile(join(dir, 'old.md'), raw.replace(/^updated: \d+$/m, `updated: ${ancient}`), 'utf8')
-    // 此时索引仍是旧快照(含 old)
-    expect(staleStore.readIndexSync('project', CWD)).toContain('old')
+    // S04 每次读取都检查源文件；陈旧缓存不能绕过当前过滤。
+    expect(staleStore.readIndexSync('project', CWD)).toBeNull()
     // 会话启动挂点的刷新触发重算
     await staleStore.refreshIndex('project', CWD)
     expect(staleStore.readIndexSync('project', CWD)).toBeNull()
@@ -534,5 +543,35 @@ describe('导入溯源 origin(0.10.0 撤销导入)', () => {
     expect(await store.read('keep-me', 'user')).not.toBeNull()
     expect(await store.deleteIf('keep-me', 'user', undefined, record => record.name === 'keep-me')).toBe(true)
     expect(await store.read('keep-me', 'user')).toBeNull()
+  })
+})
+
+describe('supersede lineage', () => {
+  it('marks the source superseded and links both directions without deleting', async () => {
+    await store.write({ name: 'old-note', description: 'old', body: 'old body', type: 'reference', status: 'verified' }, 'user', CWD)
+    await store.write({ name: 'new-note', description: 'new', body: 'new body', type: 'reference', status: 'verified' }, 'user', CWD)
+    const before = (await store.read('old-note', 'user', CWD))!
+    const result = await store.supersede('old-note', 'user', CWD, before.revision!, 'new-note')
+    expect(result.source.status).toBe('superseded')
+    expect(result.source.supersededBy).toBe('new-note')
+    expect(result.successor.supersedes).toBe('old-note')
+    expect(result.successor.status).toBe('verified')
+    expect(await store.read('old-note', 'user', CWD)).not.toBeNull()
+    expect(await store.read('old-note', 'user', CWD)).toMatchObject({ body: 'old body', status: 'superseded', supersededBy: 'new-note' })
+  })
+
+  it('rejects self, missing successor, stale revision, repeat and chained successor', async () => {
+    for (const name of ['a-note', 'b-note', 'c-note']) await store.write({ name, description: name, body: name, type: 'reference', status: 'verified' }, 'user', CWD)
+    const a = (await store.read('a-note', 'user', CWD))!
+    await expect(store.supersede('a-note', 'user', CWD, a.revision!, 'a-note')).rejects.toThrow('itself')
+    await expect(store.supersede('a-note', 'user', CWD, a.revision!, 'missing-note')).rejects.toThrow('SUCCESSOR_NOT_FOUND')
+    await expect(store.supersede('a-note', 'user', CWD, 'f'.repeat(64), 'b-note')).rejects.toThrow('Revision conflict')
+    await store.supersede('a-note', 'user', CWD, a.revision!, 'b-note')
+    const b = (await store.read('b-note', 'user', CWD))!
+    await expect(store.supersede('b-note', 'user', CWD, b.revision!, 'c-note')).resolves.toMatchObject({ successor: { name: 'c-note', supersedes: 'b-note' } })
+    const c = (await store.read('c-note', 'user', CWD))!
+    await expect(store.supersede('c-note', 'user', CWD, c.revision!, 'a-note')).rejects.toThrow('itself superseded')
+    const supersededA = (await store.read('a-note', 'user', CWD))!
+    await expect(store.supersede('a-note', 'user', CWD, supersededA.revision!, 'c-note')).rejects.toThrow('already superseded')
   })
 })

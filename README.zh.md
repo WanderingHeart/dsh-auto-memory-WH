@@ -1,229 +1,145 @@
-# dsh-auto-memory
+# dsh-auto-memory-WH
 
-[![CI](https://github.com/AskTheWay/dsh-auto-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/AskTheWay/dsh-auto-memory/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/dsh-auto-memory)](https://www.npmjs.com/package/dsh-auto-memory)
-[![npm downloads](https://img.shields.io/npm/dm/dsh-auto-memory)](https://www.npmjs.com/package/dsh-auto-memory)
-[![License: MIT](https://img.shields.io/npm/l/dsh-auto-memory)](LICENSE)
-[![Node](https://img.shields.io/node/v/dsh-auto-memory)](package.json)
+为 DeepSeek Harness（DSH）提供自动持久记忆：把值得保留的对话内容整理为本地 Markdown，在同一项目内记住具体环境和过程，并自动在用户级保存简短概括，让其他项目也能了解你的经历、偏好、反馈和参考信息。
 
-[English](README.md) | [中文](README.zh.md)
+插件提供主题整理、可撤销合并、原生提醒、可视化管理、导入导出与备份。按需读取正文、按字节预算注入索引；基础检索和词面合并不额外调用模型。自动或手动总结使用宿主配置的模型，会产生 token 消耗。
 
-> ### 你的 dsh 智能体把你说过的每件事都忘掉。每一次。每一个会话。
-> **一条命令修复。** 把 Claude Code 式持久记忆带给
-> [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)——原生实现,
-> 零服务器、零 embedding、零配置。
+当前稳定版 **1.0.0**。
 
-```sh
-dsh plugin --profile demo add dsh-auto-memory
+- npm 包名：[`dsh-auto-memory-wh`](https://www.npmjs.com/package/dsh-auto-memory-wh)
+- GitHub 仓库：[`WanderingHeart/dsh-auto-memory-WH`](https://github.com/WanderingHeart/dsh-auto-memory-WH)
+
+## 安装与开始使用
+
+需要 DSH `>=0.2.1-rc.5 <1.0.0`、Node `^22.19.0 || >=24.0.0` 及 package.json 声明的宿主服务。声明范围不代表所有版本组合都已实测。通过 DSH 插件管理器安装已经核验的发布包；首次安装建议先在独立 profile 中试用：
+
+```powershell
+& 'C:\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd' plugin --profile wh-trial add 'dsh-auto-memory-wh@1.0.0' --ignore-scripts
 ```
 
-今天对它说 *"记住:我是准备面试的 Python 后端工程师"*——
-明天开一个全新会话,问 *"你对我有什么了解?"*,它**记得**。
+请根据实际安装位置调整 CLI 路径；安装到日常桌面配置时，将 `wh-trial` 换成对应的 profile 名称，通常为 `desktop`。
 
-![dsh-auto-memory——给 DeepSeek Harness 的持久记忆](imgs/img-1-zh.png)
+安装后完全退出并重开 DSH。插件需要对 profile 和记忆目录的读写权限，通常无需管理员运行。同一运行配置只启用一个占用 memory_write/read/list/search/delete 的记忆插件。
 
----
+自动总结和用户级记忆默认开启。在 `standard` 或 `full` 档位下，达到轮数、字符数及触发条件后，插件会自动整理值得保留的对话；也可使用面板的手动会话总结。
 
-## 亮点
+## 功能与配置
 
-**1.x——可信记忆 + 端到端实测**:固化产物出生即 `candidate` 并附逐字证据
-摘录;`verified` 只能由**你**授予;有争议的记忆永不重新注入;所有写入路径
-在存储单点过注入模式守卫。而且测了:四层评测(确定性/召回/固化/端到端)+
-LongMemEval-S 对齐跑——包括一个如实公布的非目标场景分数。
-完整历史:[CHANGELOG.md](CHANGELOG.md) ·
-[Releases](https://github.com/AskTheWay/dsh-auto-memory/releases)
+### 两层记忆与四种类型
 
-## Claude Code 有的东西,dsh 一直没有。现在有了。
+| 维度 | 用途 |
+|---|---|
+| 项目级 scope=project | 保存项目环境、过程、约束和具体事实；相同项目 cwd 的不同会话共享 |
+| 用户级 scope=user | 保存简短、跨项目有用的概括；在其他项目会话中也可参与注入 |
+| user | 用户信息与偏好 |
+| feedback | 反馈、纠正与协作经验 |
+| project | 项目经历、进展与成果 |
+| reference | 值得再次使用的资料或资源信息 |
 
-DeepSeek Harness 是当下 GitHub 最火的开源智能体框架——模型、工具、沙箱,万物皆插件。
-但它**根本没有记忆子系统**。官方的答案是三份*默认关闭*的 MCP 外挂配置,而且官方文档
-自己承认局限:不自动注入、无遗忘策略、只做子串搜索。你的智能体是**设计层面的失忆症**。
+**类型和作用域彼此独立，四种类型都可用于两个作用域。** `project` 类型也可以是用户级的简短项目经历。面板类型下拉用于筛选列表，不改变记录的使用范围。
 
-`dsh-auto-memory` 用原生实现补上这个缺口:
+自动或手动会话总结时，模型在同一次请求中生成项目详情和 `userSummary` 短概括。详情保留在项目级；有效概括自动保存到用户级，保留原类型。重复总结更新对应概括，不反复新增。同名用户记录不会被项目详情覆盖；不同项目的来源分别识别。
 
-| | MCP 外挂方案 | **dsh-auto-memory** |
-|---|---|---|
-| 记忆自动注入**每一次**系统提示词 | ✗ | ✓(无记忆时零 token 占用) |
-| 类型化记忆:user / feedback / project / reference | ✗ | ✓ |
-| 工作区 + 用户双层作用域——跨项目不串扰 | ✗ | ✓ |
-| 崩溃与并发安全(跨进程锁、孤儿锁自愈) | — | ✓ |
-| 需要外部服务 / 数据库 / embedding | ✓✓✓ | **全都不用——纯 Markdown 文件** |
+- 概括最多 160 个字符，不把详情截断后直接复制。模型被要求省略本地路径、凭据、虚拟机配置及项目专属指令；明显的路径/凭据格式会被拒绝，但这不等于完备的隐私识别。
+- `enableUserScope: false` 时不写入或注入用户级概括。没有跨项目价值时可只保留项目详情。
+- 模型漏给或生成无效概括、用户级写入失败时保留详情，日志记录原因；不会伪造概括。
+- 对话中的 `memory_write` 也支持 `userSummary`；项目写入成功后自动保存有效概括，无需模型再调用一次用户级写入。
+- 不是在离开项目时才总结；概括在总结或工具写入时保存，其他项目之后的提示词组装会使用它。旧记录不因升级自动批量重写。
+- 两层记录可分别管理。面板手动编辑、导入、归档不会自动调用模型重写另一层；归档详情不等于删除跨项目经历。需要清除两层时分别处理。
 
-记忆是 `$DSH_HOME/memory/` 下的普通文件——可手改、可 grep、对 git 友好,完全属于你。
+### 自动总结和检索
 
-### 可信,不只是持久(1.0.0)
+| 配置 | 默认值与作用 |
+|---|---|
+| `autoSummarize` | true；自动会话总结开关 |
+| `autoSummarizeMinTurns` / `autoSummarizeMinChars` | 2 / 600；未达门槛不调用总结模型 |
+| `autoSummarizeIdleMinutes` | 60；闲置触发间隔，0 表示只在会话结束触发 |
+| `autoSummarizeMaxMemories` | 5；每批主记录上限，每条合格项目记录可附带一条用户概括 |
+| `autoSummarizeMaxTokens` | 2048；模型输出上限，不是总 token 成本 |
+| `autoSummarizeDedupe` / `minImportance` | true / 4；去重及价值门槛 |
+| `enableUserScope` | true；允许跨项目用户级记忆 |
+| `maxBytes` | 4096；整段记忆索引预算，0 关闭索引注入 |
+| `staleAfterDays` | 0；默认不按天数排除旧记录 |
 
-模型固化出的记忆可能"自信地错"——而错记忆每个会话都会被重新注入。所以记忆带**可信状态**:固化产物出生即 `candidate`(附转写逐字证据摘录,伪造引用会被对照转写拦下),`verified` 只能由**你**在面板授予,`disputed` / `superseded` 永不注入。所有写入路径在存储单点过注入模式守卫;内容变化自动降级信任并使旧证据失效。`🩺` 体检面板汇总待验证/僵尸/矛盾嫌疑供复核。同样的扁平文件、同样的零服务——现在连"要不要信它"都有审计轨迹。
+索引包含名称/标题与描述，完整正文由模型按需读取。置顶不能突破预算；实际使用还取决于预算、记录状态和模型是否读取。新记录无需人工审核即可参与注入；有争议、已取代、旧停用标记或过期记录会被排除。
 
-## 一分钟感受它
+### 档位、整理与管理
 
-```sh
-node scripts/demo.mjs   # 不要 API key、不开浏览器:看 写入 → 索引 → 注入 → 召回 → 遗忘
-```
+- `minimal`：基础记忆工具与索引注入，不执行自动总结。
+- `standard`：增加总结、提醒、备份、合并、导入导出与迁移入口。
+- `full`（默认）：增加关系图、人物弧光与批量管理。三档共用同一份记忆，自动总结和备份还需开启各自开关。
+- 面板支持编辑、搜索、按类型筛选、置顶、归档，以及会话总结。状态标签是内部处理结果，不是额外的使用范围。
+- 主题归类与词面关联辅助整理；`autoMerge: true` 时，同主题且相关度达到 60% 的候选可自动合并；只满足一项时进入待确认。合并可撤销，词面判断可能误并或漏配。
+- JSON 导入支持预演与冲突处理，支持导出和存储恢复；详细边界见用户指南。用户级自动概括不复制项目主题 id，可在面板单独归类。
 
-或者在真实对话里:告诉智能体值得记住的事。模型调用
-`memory_write` / `memory_read` / `memory_list` / `memory_search` /
-`memory_delete`,遵循 Claude Code 的写入纪律:**查重更新而非堆积**、
-只用绝对日期、`[[name]]` 交叉链接、`feedback` 记忆附 **Why:** /
-**How to apply:** 行。
+### 提醒、通知与备份
 
-## 记忆面板
+提醒通过宿主原生自动化任务创建，宿主需要运行；提醒不作为新的 task 记忆写入。
 
-整套记忆系统在 dsh Web UI 里只有一个入口:用户级/项目级分组、每条记忆的
-读取次数与可信徽章、置顶/停用/编辑/删除、注入统计(逐记忆+按项目+预算截断
-榜)、体检面板,以及 Claude Code 导入导出桥。
+`autoBackup` 默认 false；开启后默认每 24 小时备份，保留 5 份，由 `autoBackupIntervalHours`、`autoBackupKeep` 调整。它是运行期间的尽力备份，重要升级前仍应另做离线备份。
 
-![记忆面板:注入统计/可信徽章/导入导出](imgs/image-2.png)
+`notifyWhale` 默认 auto；`notifyDone` 默认 true，运行超过 `notifyDoneMinSeconds`（默认 60 秒）的轮次可触发小鲸鱼结束通知。通知依赖下面的可选补丁。
 
-## 从 Claude Code 导入,也能撤销
+## 使用例子
 
-面板里的 **📥 从 Claude Code 导入** 按钮只读扫描 `~/.claude/projects/*/memory`,
-按源项目分组列出每条记忆。勾选后应用:字段一一映射(同款四类型、H1 → 标题、
-ISO `modified` → 时间戳),同名记忆跳过、绝不覆盖。
+### 同项目换会话，记住具体环境
 
-导入的记忆在 frontmatter 里带一个 `origin` 块(`kind` / `slug` / `file` /
-`imported` / `hash`),所以勾选框是可逆的:取消勾选一条已导入的记忆并应用,
-它就从本插件删除——Claude Code 里的源记忆原样保留,随时可以再导。导入后被
-编辑过的记忆,内容指纹对不上,会标成**已修改**并保留,绝不会被静默丢掉。
-旧版本(0.8.0/0.9.x)导入、没有 `origin` 标记的记忆按内容完全一致识别为
-**旧版导入**,同样可以取消勾选撤销。
+在阿克曼小车项目里告诉助手：
 
-甚至不用自己盯着:宿主每 5 分钟扫描一次 Claude 记忆目录,只要有可同步的
-记忆,列表上方就会出现提示条。
+> 这个项目使用专用虚拟机完成验证，后续测试继续用这个环境。
 
-### 导出到 AGENTS.md——桥是双向的
+相关内容保存到项目级记忆后，在同一项目工作目录中新建会话，助手可以检索已保存的环境信息，无需重复提供这些细节。
 
-面板一键把**信任态**记忆(verified/未设置——candidate 和有争议的绝不外流)
-渲染成 **AGENTS.md** 片段并复制到剪贴板。粘进任何遵循 AGENTS.md 惯例的
-工具——Claude Code、Codex、Cursor——这个插件学到的东西就跟着你走。
-同样的扁平文件,两个方向。
+### 换项目后，只保留简短经历
 
-## 模型实际看到什么
+明确告诉助手：
 
-每个请求,一个系统提示词段(order 4000)携带索引——每步重新求值、字节预算控制、
-存储为空时**整段消失**:
+> 阿克曼小车项目已经完成。
 
-```
-# Persistent memory index
-## Project memories
-- [压测过 PostgreSQL](id-generator-benchmark.md) — psycopg2 连接池有踩坑经验 (2026-09)
-- [用户是 Python 后端工程师](user-prefers-python.md) — 正在准备面试; 偏好中文交流
-```
+项目级可保留开发过程、环境和验证细节，用户级则可保存：
 
-中文标题、YAML frontmatter、一条记忆一个文件——完整的 Claude Code `MEMORY.md`
-模型,在 dsh 的提示词组装管线上原生重建。
+> 用户之前完成过阿克曼小车项目。
 
-## 首发之前就被锤炼过
+在其他项目中，助手可以使用这句概括，而不会通过该自动概括带出原项目的虚拟机配置。尚未完成的项目不应被概括成已完成。
 
-这个插件在 v0.1.0 发布前经受了一次 **12 个智能体的对抗性代码审查**
-(68 万 token 的源码级拷问)。五个生产级陷阱被抓出并修复——全部带回归测试——
-其中两个若上线就是事故:
+### 保存偏好与协作反馈
 
-- **NTFS 静默毁数据**:名为 `memory` 的记忆会在大小写不敏感文件系统上撞上
-  `MEMORY.md`——写入*报告成功*,实际销毁记录。保留字守卫拦截。
-- **毒提示炸弹**:任何记忆里三个字面 `{{{ }}}` 花括号,就能炸掉工作区的
-  *每一个*模型请求——且模型无法自救。收敛式消毒器中和。
+告诉助手：
 
-还有:孤儿锁自愈(Ctrl+C 砸不坏你的记忆库)、symlink 读取防护、坏文件容错、
-稳定的索引排序(保住 KV 前缀缓存)、严格不写自定义会话事件(那会让 dsh 会话
-拒绝 resume)。
+> 解释测试结果时，先列验证证据，再给结论。
 
-## 用数字说话,不止口头宣称
+这类信息可以作为 `feedback` 类型保存。项目级记录保留具体纠正情境，用户级概括保留适合跨项目使用的协作偏好。
 
-确定性评测层([evals/](evals/README.md))随 CI 运行——无 LLM、结果完全可复现:
+### 保存参考资料
 
-- **注入成本是一条平线**——真实渲染路径实测(典型 ~40 字中文摘要,默认 4 KB 预算):
+告诉助手：
 
-  | 记忆条数 | 0 | 10 | 20 | 50 | 100 | 200 |
-  |---|---|---|---|---|---|---|
-  | 注入段 | **0 B** | 2.3 KB (~564 tok) | 3.2 KB (~801 tok) | 4.0 KB (~1008 tok) | 4.0 KB | 4.0 KB |
+> 这个项目调试时主要参考车辆控制手册，其中定位方法对后续项目也有帮助。
 
-  字节预算是硬顶——50 条之后无论存多少条,注入段钉在上限(排序靠后的行带
-  截断标记让位);空库注入 **0 字节**:整段消失。
-- **架构级压缩免疫**:索引挂在*动态*系统提示词段上、每步组装重新求值——
-  上下文压缩(compaction)只压会话历史,压不到系统提示词段,记忆无需任何
-  "重注入补丁"天然穿越每次压缩。把记忆存成会话日志消息的方案在第一次
-  压缩就会丢。
-- **端到端净贡献实测**(L2,管道之上的那一层):固化 → 注入 → 问答全链路,
-  项目特定探针题**带记忆 95.8% vs 无记忆 16.7%——净贡献 +79.2 个百分点**
-  (standard 集 30 题,盲判)。同时如实公布一个非目标场景数据点:LongMemEval-S
-  (122k token 闲聊海捞针,30 题分层子集,官方判分协议)总分 23.3%——
-  量化了编码场景设计与闲捞针任务的距离,而不是挑基准。[结果](evals/results/) ·
-  [方法学](evals/README.md)
-- **淘汰零误杀**:四类混合场景——只有"超龄零引用"被隐藏,文件零丢失,
-  读一次即复活。
-- **已知局限(有意钉板)**:预算截断目前按索引行序(位置式)而非相关性排序——
-  半量预算压力下探针保留率随规模降至 ~38%→10%。**置顶可解关键项**:同预算下
-  pinned 探针保留 **≥80%**(0.3.0);完整相关性排序仍在路线图。
+项目级可保留具体使用情境，用户级概括可记录存在这样一份可复用资料。没有跨项目价值的细节无需提升到用户级。
 
-评测层已抓到过真实 bug:字节预算曾遗漏指导文本、整段超支 ~800 字节
-(已修复并带回归)。
+### 创建原生提醒
 
-**已实测平台矩阵**(手动验证,非纸面声明):
+告诉助手：
 
-| | CLI | 桌面端 | Web profile |
-|---|---|---|---|
-| dsh 版本 | 0.1.5-rc.2 | 0.2.0-rc.2 | 0.2.1-rc.2 |
-| 状态 | ✓ 工具/注入/固化 | ✓ 面板 + 导入 + 审计 | ✓ 面板 + 导入 |
+> 30 分钟后提醒我检查测试结果。
 
-**188 项测试 + 四层评测(L0 确定性/L1 召回/L3 固化质量/L2 端到端 + LongMemEval 对齐)。运行时依赖仅 `yaml`。**
+助手可通过 `memory_remind` 创建宿主提醒；跨项目投递目标含糊时，会询问目标。
 
-## 安装
+## 可选的小鲸鱼补丁
 
-```sh
-dsh plugin --profile demo add dsh-auto-memory   # npm 直装(预构建)
-dsh --profile demo                               # 重启 profile 生效
-```
+核心记忆和宿主原生提醒不依赖小鲸鱼。气泡与声音增强需要外部小鲸鱼插件提供兼容的 `window.__dshWhaleNotify` 钩子；普通安装本插件不会修改其他插件。
 
-源码安装:`npm install && npm run build && dsh plugin --profile demo add /绝对路径`。
-要求 `@deepseek-ai/dsh >= 0.1.5-rc.2`(Node `^22.19 || >=24`)。
-兼容官方桌面端——已在 0.2.0-rc.2 实测。
+其他用户若想使用这项增强，也需要自行配置兼容钩子或使用提供该接口的版本。当前本地补丁不在 npm/tgz 发布包中。小鲸鱼更新或重装可能覆盖补丁，之后应检查兼容性并按对应版本重新应用；不能保证旧补丁适用于新版本。详见[用户指南](docs/attachments/user-guide.md)。
 
-## 配置
+## 升级与回退
 
-在 profile 的 `cordis.patch.yml` 覆盖(config 整表替换):
+升级前备份目标 profile 配置、旧安装包和完整 `memory-wh`；退出 DSH 后安装新包，再重启核查记忆。1.0.0 与 rc.19 的存储格式和核心记忆逻辑保持一致，已验证两者之间的隔离升级与回退。用户级概括是普通 Markdown 记录；回退到尚未实现自动概括的旧版本后，已有概括仍可保留，但旧版本不会继续自动维护它们。回退软件不等于回退数据；若需要恢复历史数据，使用匹配的备份。
 
-```yaml
-- id: auto-memory
-  config:
-    maxBytes: 4096          # 注入预算(索引+指导文本+协议壳)
-    memoryDir: D:/memories  # 默认: $DSH_HOME/memory
-    enableUserScope: true   # false: 用户层在所有路径禁用
-    autoSummarize: false         # true: 根会话结束时后台 LLM 提取持久事实写入
-    autoSummarizeMaxMemories: 5  # 单次固化上限
-    autoSummarizeMaxTokens: 2048 # 固化输出 token 上限
-    staleAfterDays: 0            # >0: 软隐藏超 N 天零引用记忆(文件保留)
-```
+## 文档与限制
 
-## 工作原理(60 秒)
+包内：[完整配置](docs/configuration.md)、[注入和管理](docs/trust-ui.md)、[存储恢复](docs/storage-recovery.md)、[变更记录](CHANGELOG.md)。源码仓库另有[用户指南](docs/attachments/user-guide.md)、[发布与验收报告](docs/attachments/release.md)、[开发时间线](docs/progress/README.md)。测试数量与包哈希记录在验收报告，避免与不同候选混用。
 
-- **写入**:工具 `execute` → name 归一化为 `[a-z0-9-]`(保留字拒绝)→
-  跨进程文件锁(官方 `dsh-atomic-write`)→ 原子写 → 锁内全量重建索引。
-- **注入**:单个动态段,每步组装重新求值;同步读索引、执行字节预算、中和 `{{`。
-  工具写入在**下一个请求**即生效——永远不需要重启。
-- **审计**:不写自定义会话事件(第三方事件类型会让 dsh 拒绝 resume);
-  一切走标准 `tool/call` / `tool/result`。1.0 起每次注入还会落
-  `audit.jsonl`(哪些记忆/哪个会话/预算截了谁)并聚合进面板统计——
-  记忆带纸质轨迹。
+总结质量受模型影响。已完成四种类型的真实模型分层测试，但不保证所有模型和任意对话都能正确总结、分类和召回。真实双设备 relay、长期提醒与移动端仍有验证边界。记忆虽然保存在本地，但会随宿主模型请求发送；本地存储不等于永不离开设备。归档不是隐私擦除。
 
-深度内容:[设计决策](docs/design.md) ·
-[复盘:向 awesome-dsh-plugin 提 PR](docs/postmortem-pr-5696.md)
-
-## 路线图
-
-- [x] P0——类型化存储、四工具、提示词注入、分层作用域、崩溃安全
-- [x] P1——会话结束自动固化、遗忘与淘汰、召回展开、人工审批的批量删除
-- [x] P2——Web UI 记忆面板、token 成本/召回质量评测
-- [x] P3——更新替换语义、匹配核心与评测共用
-- [x] 0.8–1.0——Claude Code 导入桥(可撤销)、注入审计+统计、可信记忆(状态/证据/守卫/体检)
-- [x] 1.1–1.2——L2 端到端 + LongMemEval 对齐、memory_search、导入 watcher、反向 AGENTS.md 导出
-- [ ] L2 精修(相关性排序截断)、社区反馈驱动
-
-## 更新日志
-
-逐版本说明:[CHANGELOG.md](CHANGELOG.md) ·
-[GitHub Releases](https://github.com/AskTheWay/dsh-auto-memory/releases)
-
-## 许可
-
-MIT
+基于 AskTheWay/dsh-auto-memory v1.3.0 独立开发，保留 [MIT 许可](LICENSE)、[上游来源](UPSTREAM.md)和[第三方声明](THIRD_PARTY_NOTICES.md)。软件许可不授权公开用户记忆数据。

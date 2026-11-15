@@ -14,9 +14,9 @@ jobs:
         with:
           node-version: 24
       - name: Install (dev deps + auto-installed peers)
-        run: npm install
+        run: npm ci --ignore-scripts
       - name: Type check (strict)
-        run: npx tsc --noEmit
+        run: npm run typecheck
       - name: Tests
         run: npm test
       - name: Build

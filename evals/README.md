@@ -3,7 +3,7 @@
 > 定位声明:本评测**不参与 LoCoMo 类打榜**(金标/judge 争议大,同系统分差 ±20)。
 > 我们发布的是"轻量文件型记忆的**确定性指标层**":无 LLM、无 API key、结果
 > 100% 可复现,随 `npm test` 在 CI 中作为回归护栏运行。
-> 背景与完整调研见 [docs/landscape-2026-09.md](../docs/landscape-2026-09.md)。
+> 背景与完整调研见 [docs/landscape-2026-09.md](../docs/attachments/public-validation.md)。
 
 ## 分层
 
