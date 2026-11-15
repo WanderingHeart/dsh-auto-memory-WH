@@ -11,7 +11,7 @@ import { renderMemoryIndexDetail } from '../src/prompt.ts'
 import { appendAudit, getAuditStatus, readAudit, registerInjectionAudit } from '../src/audit-log.ts'
 import type { Config } from '../src/index.ts'
 let root: string, store: MemoryStore, ctx: Context | undefined
-const cwd = 'D:\\synthetic-A', cwdB = 'D:\\synthetic-B'
+const cwd = join(tmpdir(), 'wh-test-projects', 'synthetic-A'), cwdB = join(tmpdir(), 'wh-test-projects', 'synthetic-B')
 const config = { maxBytes: 4096, enableUserScope: true, staleAfterDays: 0 } as Config
 const record = { name: 'alpha', description: '中文 synthetic fact', body: 'body only', type: 'project' as const }
 beforeEach(async () => { root = await fs.mkdtemp(join(tmpdir(), 'wh-s04-')); store = new MemoryStore(root) })

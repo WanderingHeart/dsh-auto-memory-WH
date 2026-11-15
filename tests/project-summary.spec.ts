@@ -18,7 +18,7 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'wh-layered-')); roots.push(root)
   return { root, store: new MemoryStore(root) }
 }
-const a='C:/synthetic/ackermann', b='C:/synthetic/other'
+const a=join(tmpdir(), 'wh-test-projects', 'synthetic', 'ackermann'), b=join(tmpdir(), 'wh-test-projects', 'synthetic', 'other')
 const config={maxBytes:65536,enableUserScope:true,staleAfterDays:0} as Config
 const summary='用户之前完成过阿克曼小车项目。'
 const detail='用户已完成阿克曼小车项目；该项目使用专用虚拟机，VM_DETAIL_ONLY 为项目内部环境标识。'

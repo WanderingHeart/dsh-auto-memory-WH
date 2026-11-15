@@ -17,7 +17,7 @@ import { lintRecord, qualityReport, DESCRIPTION_MAX, SECTIONS_MAX, STALE_DAYS } 
 import type { MemoryRecord } from '../src/types.ts'
 
 const NOW = Date.UTC(2026, 10, 7, 12, 0, 0)
-const cwd = 'D:\\synthetic-quality'
+const cwd = join(tmpdir(), 'wh-test-projects', 'synthetic-quality')
 
 function record(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
   return {

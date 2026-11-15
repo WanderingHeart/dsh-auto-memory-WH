@@ -19,7 +19,7 @@ import { buildExportPackage, verifyExportPackage, applyImport } from '../src/tra
 import { isRemindableTask } from '../src/tasks.ts'
 import type { MemoryRecord } from '../src/types.ts'
 
-const cwd = 'D:\\synthetic-task'
+const cwd = join(tmpdir(), 'wh-test-projects', 'synthetic-task')
 const later = Date.UTC(2026, 10, 20, 9, 0, 0)
 const remind = Date.UTC(2026, 10, 20, 8, 0, 0)
 
@@ -177,10 +177,10 @@ describe('model tools: reminders live in the native scheduler (v0.9.0)', () => {
     const calls: Array<Record<string, unknown>> = []
     const run = await tools({
       remind: async input => { calls.push(input as unknown as Record<string, unknown>); return { id: 'r4', title: input.title, timing: { kind: 'after', after_seconds: 60 }, prompt: 'p' } },
-      routeReminder: () => ({ target: 'new_once', cwd: 'D:\\other-project', reason: 'other-project:other' }),
+      routeReminder: () => ({ target: 'new_once', cwd: join(tmpdir(), 'wh-test-projects', 'other-project'), reason: 'other-project:other' }),
     })
     await run('memory_remind', { title: 'x', inSeconds: 60 })
-    expect(calls[0]).toMatchObject({ newSession: true, cwd: 'D:\\other-project', sessionId: 'synthetic-task' })
+    expect(calls[0]).toMatchObject({ newSession: true, cwd: join(tmpdir(), 'wh-test-projects', 'other-project'), sessionId: 'synthetic-task' })
   })
 
   it('lists plugin reminders with times in the machine local time zone', async () => {
