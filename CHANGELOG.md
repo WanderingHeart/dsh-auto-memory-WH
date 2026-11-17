@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Clarify bilingual installation, configuration, privacy, backup/restore, uninstall/data-removal, troubleshooting, and compatibility boundaries for market review.
+- Refresh upstream provenance and dependency-license documentation against the current repository and lockfile.
+- Add a reproducible `npm run check` entry point and declare the audited npm version.
+- Update the development test stack to patched Vitest/Vite releases; pin a compatible Rolldown patch after the newest native Windows binding failed validation. Runtime plugin code and the memory storage format are unchanged.
+
 ## [1.0.1] — 2026-11-15
 
 - Show only the three newest automatic merges inline.

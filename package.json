@@ -29,10 +29,12 @@
   ],
   "scripts": {
     "build": "tsdown",
+    "check": "npm run typecheck && npm test && npm run build",
     "test": "vitest run",
     "prepare": "tsdown",
     "typecheck": "tsc --noEmit"
   },
+  "packageManager": "npm@11.19.1",
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.2",
     "yaml": "^2.4.2"
@@ -64,7 +66,11 @@
     "react-dom": "19.3.0",
     "tsdown": "^0.22.2",
     "typescript": "^5.9.0",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.12"
+  },
+  "overrides": {
+    "rolldown": "1.2.11",
+    "vite": "8.3.3"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
