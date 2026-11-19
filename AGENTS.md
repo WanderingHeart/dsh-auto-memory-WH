@@ -1,6 +1,6 @@
 # Project guidance
 
-- Project display name: dsh-auto-memory-WH; package name: dsh-auto-memory-wh.
+- Project display name: DSH Memory; package name: dsh-auto-memory-wh.
 - Stage explanations belong only in docs/progress/ with an index in docs/progress/README.md. Use YYYY-MM-DD_NNN_<topic>.md (date, zero-padded within-day sequence, topic); preserve original stage/version/revision in report bodies. Keep previous stage reports.
 - Version update documentation belongs in root CHANGELOG.md.
 - Overall specifications remain in the sibling ../memory folder.

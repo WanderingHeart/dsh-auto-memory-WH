@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use “DSH Memory” as the public display name, “Memory” (“记忆”) in the sidebar, and “Memory Library” (“记忆库”) for the management page. The npm package and plugin identity are unchanged.
+
 - Keep the memory editor’s Save label white for legibility in the dark theme.
 
 - Declare DSH `0.2.2-rc.4` and `0.2.2-rc.5` peers and align `agent/created` listeners with the newer event return contract. Test both candidates inside the existing Windows and Ubuntu CI jobs.

@@ -323,7 +323,7 @@ function MemoryArcView({ request, target, onPick, onClose }: { request: MemoryFa
 }
 interface MergeHistoryEntry { id: string; target: string; title: string; at: string; kind: string; sources: string[]; body: string; available: boolean; canUndo: boolean }
 
-export function MemoryPage({ request }: MemoryPageProps): ReactNode {
+export function MemoryPage({ request, t }: MemoryPageProps): ReactNode {
   const [scope, setScope] = useState<Scope>('user')
   const [sessionId, setSessionId] = useState('')
   const [query, setQuery] = useState(''), [status, setStatus] = useState(''), [type, setType] = useState('')
@@ -677,7 +677,7 @@ export function MemoryPage({ request }: MemoryPageProps): ReactNode {
     }}>
     {dragging && <div className="dam-wh-dropzone" aria-hidden="true">松开以预演导入 JSON 包</div>}
     <div className="dam-wh-shell">
-    <header className="dam-wh-header"><h1 className="dam-wh-title">持久记忆 WH</h1>
+    <header className="dam-wh-header"><h1 className="dam-wh-title">{t('title')}</h1>
     <div className="dam-wh-header-actions">
       <label className={searchOpen ? 'dam-wh-search dam-wh-search--open' : 'dam-wh-search'}>
         <input ref={searchInputRef} aria-label="搜索记忆" placeholder="搜索记忆" tabIndex={searchOpen ? 0 : -1} value={query} maxLength={256} onChange={event => { setQuery(event.target.value); setOffset(0) }} onKeyDown={event => { if (event.key === 'Escape') setSearchOpen(false) }} />

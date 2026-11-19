@@ -1,4 +1,4 @@
-# dsh-auto-memory-WH
+# DSH Memory
 
 [中文说明](README.zh.md)
 

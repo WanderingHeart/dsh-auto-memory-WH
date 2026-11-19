@@ -1,4 +1,4 @@
-# dsh-auto-memory-WH
+# DSH Memory
 
 为 DeepSeek Harness（DSH）提供自动持久记忆：把值得保留的对话内容整理为本地 Markdown，在同一项目内记住具体环境和过程，并自动在用户级保存简短概括，让其他项目也能了解你的经历、偏好、反馈和参考信息。
 
