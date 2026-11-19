@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reuse per-record graph scoring inputs to reduce construction time without changing graph results.
+
 - Use “DSH Memory” as the public display name, “Memory” (“记忆”) in the sidebar, and “Memory Library” (“记忆库”) for the management page. The npm package and plugin identity are unchanged.
 
 - Keep the memory editor’s Save label white for legibility in the dark theme.

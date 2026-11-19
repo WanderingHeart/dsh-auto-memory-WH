@@ -119,8 +119,11 @@ function escapeRegExp(value: string): string {
 /** 正文/描述里直接写了对方的 name（或 [[name]] 形式）。 */
 export function mentions(text: string | undefined, name: string): boolean {
   if (!text || name.length < 4) return false
-  const pattern = new RegExp('(^|[^a-z0-9_-])' + escapeRegExp(name) + '($|[^a-z0-9_-])', 'i')
-  return pattern.test(text)
+  return mentionPattern(name)?.test(text) ?? false
+}
+
+function mentionPattern(name: string): RegExp | undefined {
+  return name.length < 4 ? undefined : new RegExp('(^|[^a-z0-9_-])' + escapeRegExp(name) + '($|[^a-z0-9_-])', 'i')
 }
 
 /** 是否具有中文/英文的有效文本（用于空正文测试与面板空态）。 */
@@ -128,62 +131,78 @@ export function hasWords(text: string | undefined): boolean {
   return tokenize(text).size > 0
 }
 
-export function scoreRelated(target: RelatednessRecord, candidate: RelatednessRecord): { score: number; reasons: string[] } {
-  let score = 0
-  const reasons: string[] = []
+function prepareRelated(record: RelatednessRecord) {
+  return {
+    record,
+    text: [record.name, record.title, record.description, record.body].join('\n'),
+    mention: mentionPattern(record.name),
+    titleTokens: tokenize([record.title, record.name].join(' ')),
+    descriptionTokens: tokenize(record.description),
+    bodyTokens: tokenize(record.body),
+  }
+}
 
-  const targetText = [target.name, target.title, target.description, target.body].join('\n')
-  const candidateText = [candidate.name, candidate.title, candidate.description, candidate.body].join('\n')
-  if (mentions(targetText, candidate.name) || mentions(candidateText, target.name)) {
+type PreparedRelated = ReturnType<typeof prepareRelated>
+
+function relatedScore(left: PreparedRelated, right: PreparedRelated, reasons?: string[]): number {
+  const target = left.record, candidate = right.record
+  let score = 0
+  if (right.mention?.test(left.text) || left.mention?.test(right.text)) {
     score += 40
-    reasons.push('记录之间显式引用 +40')
+    reasons?.push('记录之间显式引用 +40')
   }
 
-  const targetTitle = tokenize([target.title, target.name].join(' '))
-  const candidateTitle = tokenize([candidate.title, candidate.name].join(' '))
-  const titleOverlap = overlap(targetTitle, candidateTitle)
+  const titleOverlap = overlap(left.titleTokens, right.titleTokens)
   if (titleOverlap > 0) {
     const points = Math.round(25 * titleOverlap)
     score += points
-    reasons.push('标题/名称共享关键词 +' + points)
+    reasons?.push('标题/名称共享关键词 +' + points)
   }
 
-  const descOverlap = overlap(tokenize(target.description), tokenize(candidate.description))
+  const descOverlap = overlap(left.descriptionTokens, right.descriptionTokens)
   if (descOverlap > 0) {
     const points = Math.round(15 * descOverlap)
     score += points
-    reasons.push('描述内容相近 +' + points)
+    reasons?.push('描述内容相近 +' + points)
   }
 
-  const bodyOverlap = overlap(tokenize(target.body), tokenize(candidate.body))
+  const bodyOverlap = overlap(left.bodyTokens, right.bodyTokens)
   if (bodyOverlap > 0) {
     const points = Math.round(15 * bodyOverlap)
     score += points
-    reasons.push('正文内容相近 +' + points)
+    reasons?.push('正文内容相近 +' + points)
   }
 
   if (target.sameProject && candidate.sameProject) {
     score += 10
-    reasons.push('同一项目 +10')
+    reasons?.push('同一项目 +10')
   }
   if (target.type === candidate.type) {
     score += 5
-    reasons.push('类型相同 +5')
+    reasons?.push('类型相同 +5')
   }
   if (target.scope === candidate.scope) {
     score += 5
-    reasons.push('作用域相同 +5')
+    reasons?.push('作用域相同 +5')
   }
   if (
     target.updatedMs !== undefined && candidate.updatedMs !== undefined
     && Math.abs(target.updatedMs - candidate.updatedMs) <= RELATEDNESS_TIME_WINDOW_MS
   ) {
     score += 5
-    reasons.push('更新时间接近 +5')
+    reasons?.push('更新时间接近 +5')
   }
 
-  return { score: Math.min(100, score), reasons }
+  return Math.min(100, score)
 }
+
+export function scoreRelated(target: RelatednessRecord, candidate: RelatednessRecord): { score: number; reasons: string[] } {
+  const reasons: string[] = []
+  return { score: relatedScore(prepareRelated(target), prepareRelated(candidate), reasons), reasons }
+}
+
+const compareRelated = (left: { name: string; score: number }, right: { name: string; score: number }) =>
+  right.score - left.score || left.name.localeCompare(right.name, 'en')
 
 /**
  * 排序并截断。低于 RELATEDNESS_WEAK 的不返回——面板宁可不展示，也不给人“什么都相关”的错觉。
@@ -207,7 +226,7 @@ export function rankRelated(
       reasons,
     })
   }
-  hits.sort((left, right) => right.score - left.score || left.name.localeCompare(right.name, 'en'))
+  hits.sort(compareRelated)
   return hits.slice(0, Math.max(0, limit))
 }
 
@@ -254,8 +273,22 @@ export function buildGraph(
     degree: 0,
   }))
   const byKey = new Map<string, RelatednessGraphEdge>()
-  for (const target of records) {
-    for (const hit of rankRelated(target, records, neighbors)) {
+  // Prepare text, token sets and literal mention patterns once per record.
+  // Keep the original candidate filter, stable tie order, and top-N selection.
+  const prepared = records.map(prepareRelated)
+  const candidates = prepared.filter(({ record, descriptionTokens, bodyTokens }) =>
+    hasWords(record.title) || descriptionTokens.size > 0 || bodyTokens.size > 0)
+  for (const left of prepared) {
+    const target = left.record
+    const hits: Pick<RelatednessHit, 'name' | 'scope' | 'score'>[] = []
+    for (const right of candidates) {
+      const { name, scope } = right.record
+      if (name === target.name && scope === target.scope) continue
+      const score = relatedScore(left, right)
+      if (score >= RELATEDNESS_WEAK) hits.push({ name, scope, score })
+    }
+    hits.sort(compareRelated)
+    for (const hit of hits.slice(0, neighbors)) {
       if (hit.score < threshold) continue
       const a = target.scope + ':' + target.name
       const b = hit.scope + ':' + hit.name
