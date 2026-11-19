@@ -44,6 +44,7 @@ const boot = bundled('dsh-app-boot')
 const plugin = 'dsh-auto-memory-wh'
 boot.initProfile(profile, [...PROFILE_TEMPLATES.web.bundles, ...(archive ? [] : [plugin])])
 const profileFile = join(profile, 'package.json')
+const candidate = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'))
 const manifest = () => JSON.parse(readFileSync(profileFile, 'utf8'))
 const hash = file => createHash('sha256').update(readFileSync(file)).digest('hex')
 function packageManager(phase, args) {
@@ -124,7 +125,7 @@ async function verify() {
       result.peerCheckExit = packageManager('peers', ['peers', 'check'])
     } else {
       const m = manifest()
-      m.dependencies[plugin] = '1.0.1'
+      m.dependencies[plugin] = candidate.version
       writeFileSync(profileFile, JSON.stringify(m, null, 2) + '\n')
       mkdirSync(target, { recursive: true })
       for (const file of ['lib', 'package.json', 'cordis.patch.yml']) cpSync(join(repo, file), join(target, file), { recursive: true })

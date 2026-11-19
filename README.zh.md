@@ -6,6 +6,8 @@
 
 当前稳定版 **1.0.1**。
 
+当前源码为本地 **1.0.2** 候选版，尚未发布到 npm。
+
 - npm 包名：[`dsh-auto-memory-wh`](https://www.npmjs.com/package/dsh-auto-memory-wh)
 - GitHub 仓库：[`WanderingHeart/dsh-auto-memory-WH`](https://github.com/WanderingHeart/dsh-auto-memory-WH)
 

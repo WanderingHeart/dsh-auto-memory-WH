@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [1.0.2] — Local release candidate (not published)
+
 - Reuse per-record graph scoring inputs to reduce construction time without changing graph results.
 
 - Use “DSH Memory” as the public display name, “Memory” (“记忆”) in the sidebar, and “Memory Library” (“记忆库”) for the management page. The npm package and plugin identity are unchanged.
