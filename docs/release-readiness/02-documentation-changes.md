@@ -48,7 +48,7 @@ Replaced obsolete claims that the repository was a detached, uncommitted develop
 
 ### `THIRD_PARTY_NOTICES.md`
 
-Replaced the stale rc.2/160-entry inventory. The notice now identifies the four resolved runtime packages, their locked versions and license hashes; states that host peers are supplied by DSH; summarizes all 167 lock entries by license; and points to the lockfile as the detailed source of truth so the table does not drift again.
+Replaced the stale rc.2 inventory. The notice now identifies the four resolved runtime packages, their locked versions and license hashes; states that host peers are supplied by DSH; summarizes all 160 lock entries by license; and points to the lockfile as the detailed source of truth.
 
 ### `docs/release-readiness/`
 
