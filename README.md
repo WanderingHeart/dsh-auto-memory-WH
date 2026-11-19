@@ -6,6 +6,8 @@ Persistent memory for DeepSeek Harness (DSH), derived from AskTheWay/dsh-auto-me
 
 Current stable release: **1.0.1**.
 
+This checkout contains the local **1.0.2** release candidate. It is not available from npm.
+
 ## What it does
 
 - Stores memories as local Markdown under the WH data root.
