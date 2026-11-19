@@ -2,10 +2,13 @@
 
 ## Unreleased
 
+- Declare DSH `0.2.2-rc.4` and `0.2.2-rc.5` peers and align `agent/created` listeners with the newer event return contract. Test both candidates inside the existing Windows and Ubuntu CI jobs.
+- Accept upstream takeover of locks owned by confirmed-dead processes. Retain offline recovery and test refusal for live or unrecognized lock owners. No memory format change.
+
 - Clarify bilingual installation, configuration, privacy, backup/restore, uninstall/data-removal, troubleshooting, and compatibility boundaries for market review.
 - Refresh upstream provenance and dependency-license documentation against the current repository and lockfile.
 - Add a reproducible `npm run check` entry point and declare the audited npm version.
-- Update the development test stack to patched Vitest/Vite releases; pin a compatible Rolldown patch after the newest native Windows binding failed validation. Runtime plugin code and the memory storage format are unchanged.
+- Update the development test stack to patched Vitest/Vite releases; pin a compatible Rolldown patch after the newest native Windows binding failed validation.
 
 ## [1.0.1] — 2026-11-15
 

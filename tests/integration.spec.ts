@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt, { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import { mountPromptTools } from './helpers/prompt-tools.ts'
 import * as autoMemory from '../src/index.ts'
 
 describe('dsh-auto-memory 插件挂载', () => {
@@ -42,7 +43,7 @@ describe('dsh-auto-memory 插件挂载', () => {
 
   it('系统提示词:唯一 memory 段注册、无记忆时段为空、渲染不抛错', async () => {
     await ctx.plugin(SystemPrompt, {})
-    await ctx.plugin(ToolRuntime, {})
+    await mountPromptTools(ctx)
     await ctx.plugin(autoMemory, { maxBytes: 4096, memoryDir: root, enableUserScope: true, autoSummarize: false, autoSummarizeMaxMemories: 5, autoSummarizeMaxTokens: 2048, minImportance: 4, staleAfterDays: 0 })
 
     const assembly = await ctx.systemPrompt.assemble()

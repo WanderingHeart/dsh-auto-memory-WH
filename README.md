@@ -20,6 +20,8 @@ Memory type (`user`, `feedback`, `project`, or `reference`) is a content categor
 
 Declared compatibility is DSH `>=0.2.1-rc.5 <1.0.0`, Node `^22.19.0 || >=24.0.0`, and the exact host peer ranges in [package.json](package.json). This declaration is not evidence that every allowed combination or Desktop build has been tested.
 
+The unreleased source explicitly accepts `0.2.2-rc.4` and `0.2.2-rc.5` host peers. This does not change the metadata of the published `1.0.1` package. Run `npm run check:dsh -- 0.2.2-rc.4` or `npm run check:dsh -- 0.2.2-rc.5` to verify the source.
+
 Prefer the DSH Desktop plugin manager. For an isolated CLI profile on the known Windows Desktop layout:
 
 ```powershell

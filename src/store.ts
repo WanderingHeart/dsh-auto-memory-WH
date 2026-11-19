@@ -90,7 +90,7 @@ export function asMemoryType(raw: string): MemoryType {
 
 /** Historical export name retained for audit callers. Lock reclamation is explicit offline maintenance. */
 export async function withLockRecovery<T>(lockTarget: string, operation: () => Promise<T>): Promise<T> {
-  // A timeout or EPERM is not proof of death. Offline maintenance handles stale locks.
+  // The host may reclaim proven-dead owners. Never infer death from timeout or EPERM here.
   assertNoLinksSync(lockTarget)
   return withFileLock(lockTarget, operation)
 }
