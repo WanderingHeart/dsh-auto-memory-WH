@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep the memory editor’s Save label white for legibility in the dark theme.
+
 - Declare DSH `0.2.2-rc.4` and `0.2.2-rc.5` peers and align `agent/created` listeners with the newer event return contract. Test both candidates inside the existing Windows and Ubuntu CI jobs.
 - Accept upstream takeover of locks owned by confirmed-dead processes. Retain offline recovery and test refusal for live or unrecognized lock owners. No memory format change.
 
