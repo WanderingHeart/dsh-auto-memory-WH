@@ -4,9 +4,7 @@
 
 Persistent memory for DeepSeek Harness (DSH), derived from AskTheWay/dsh-auto-memory v1.3.0. The npm package is `dsh-auto-memory-wh`; upstream MIT attribution is preserved in [LICENSE](LICENSE), [UPSTREAM.md](UPSTREAM.md), and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-Current stable release: **1.0.1**.
-
-This checkout contains the local **1.0.2** release candidate. It is not available from npm.
+Current stable release: [**1.0.2**](https://www.npmjs.com/package/dsh-auto-memory-wh/v/1.0.2).
 
 ## What it does
 
@@ -22,12 +20,12 @@ Memory type (`user`, `feedback`, `project`, or `reference`) is a content categor
 
 Declared compatibility is DSH `>=0.2.1-rc.5 <1.0.0`, Node `^22.19.0 || >=24.0.0`, and the exact host peer ranges in [package.json](package.json). This declaration is not evidence that every allowed combination or Desktop build has been tested.
 
-The unreleased source explicitly accepts `0.2.2-rc.4` and `0.2.2-rc.5` host peers. This does not change the metadata of the published `1.0.1` package. Run `npm run check:dsh -- 0.2.2-rc.4` or `npm run check:dsh -- 0.2.2-rc.5` to verify the source.
+Version 1.0.2 explicitly accepts the DSH `0.2.2-rc.4` and `0.2.2-rc.5` host peers. To check a source checkout, run `npm run check:dsh -- 0.2.2-rc.4` or `npm run check:dsh -- 0.2.2-rc.5`.
 
 Prefer the DSH Desktop plugin manager. For an isolated CLI profile on the known Windows Desktop layout:
 
 ```powershell
-& 'C:\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd' plugin --profile wh-trial add 'dsh-auto-memory-wh@1.0.1' --ignore-scripts
+& 'C:\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd' plugin --profile wh-trial add 'dsh-auto-memory-wh@1.0.2' --ignore-scripts
 ```
 
 Use the embedded CLI that belongs to your Desktop installation and the profile actually used by that installation. Fully exit and restart DSH after changing plugins. Only one plugin that owns `memory_write`, `memory_read`, `memory_list`, `memory_search`, or `memory_delete` may be enabled in a profile; WH fails startup instead of silently replacing an existing owner.

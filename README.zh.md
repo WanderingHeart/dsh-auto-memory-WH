@@ -4,9 +4,7 @@
 
 插件提供主题整理、可撤销合并、原生提醒、可视化管理、导入导出与备份。按需读取正文、按字节预算注入索引；基础检索和词面合并不额外调用模型。自动或手动总结使用宿主配置的模型，会产生 token 消耗。
 
-当前稳定版 **1.0.1**。
-
-当前源码为本地 **1.0.2** 候选版，尚未发布到 npm。
+当前稳定版为 [**1.0.2**](https://www.npmjs.com/package/dsh-auto-memory-wh/v/1.0.2)。
 
 - npm 包名：[`dsh-auto-memory-wh`](https://www.npmjs.com/package/dsh-auto-memory-wh)
 - GitHub 仓库：[`WanderingHeart/dsh-auto-memory-WH`](https://github.com/WanderingHeart/dsh-auto-memory-WH)
@@ -16,14 +14,14 @@
 需要 DSH `>=0.2.1-rc.5 <1.0.0`、Node `^22.19.0 || >=24.0.0` 及 package.json 声明的宿主服务。声明范围不代表所有版本组合都已实测。通过 DSH 插件管理器安装已经核验的发布包；首次安装建议先在独立 profile 中试用：
 
 ```powershell
-& 'C:\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd' plugin --profile wh-trial add 'dsh-auto-memory-wh@1.0.1' --ignore-scripts
+& 'C:\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd' plugin --profile wh-trial add 'dsh-auto-memory-wh@1.0.2' --ignore-scripts
 ```
 
 请根据实际安装位置调整 CLI 路径；安装到日常桌面配置时，将 `wh-trial` 换成对应的 profile 名称，通常为 `desktop`。
 
 安装后完全退出并重开 DSH。插件需要对 profile 和记忆目录的读写权限，通常无需管理员运行。同一运行配置只启用一个占用 memory_write/read/list/search/delete 的记忆插件。
 
-未发布源码已显式接受 DSH `0.2.2-rc.4` 和 `0.2.2-rc.5` 的宿主依赖；npm 上已发布的 `1.0.1` 元数据不会随源码变化。可运行 `npm run check:dsh -- 0.2.2-rc.4` 或 `npm run check:dsh -- 0.2.2-rc.5` 回归。
+1.0.2 的宿主依赖声明已包含 DSH `0.2.2-rc.4` 和 `0.2.2-rc.5`。在源码目录可运行 `npm run check:dsh -- 0.2.2-rc.4` 或 `npm run check:dsh -- 0.2.2-rc.5` 验证。
 
 自动总结和用户级记忆默认开启。在 `standard` 或 `full` 档位下，达到轮数、字符数及触发条件后，插件会自动整理值得保留的对话；也可使用面板的手动会话总结。
 
