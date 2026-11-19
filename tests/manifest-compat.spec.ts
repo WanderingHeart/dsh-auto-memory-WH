@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest'
 
 const manifest = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as {
   engines?: { dsh?: string }
+  peerDependencies: Record<string, string>
 }
 
 interface Parsed {
@@ -73,9 +74,14 @@ describe('declared DSH compatibility window', () => {
     expect(range).toMatch(/^>=0\.2\.1-rc\.5 <\d+\.\d+\.\d+$/)
   })
 
-  it('keeps every host version that has been exercised locally', () => {
-    expect(satisfies('0.2.1-rc.5', range!)).toBe(true)
-    expect(satisfies('0.2.2-rc.1', range!)).toBe(true)
+  it.each(['0.2.1-rc.5', '0.2.2-rc.1', '0.2.2-rc.3', '0.2.2-rc.4', '0.2.2-rc.5'])('admits host %s', version => {
+    expect(satisfies(version, range!)).toBe(true)
+  })
+
+  it.each(['0.2.2-rc.4', '0.2.2-rc.5'])('declares %s on every DSH host-service peer', version => {
+    const hostPeers = Object.entries(manifest.peerDependencies).filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
+    expect(hostPeers).toHaveLength(7)
+    for (const [name, allowed] of hostPeers) expect(allowed.split(' || '), name).toContain(version)
   })
 
   it('does not claim future major compatibility', () => {

@@ -313,6 +313,8 @@ export const PANEL_CSS = `
 .dam-wh-editor>h2,.dam-wh-editor>p{margin:0;}
 .dam-wh-editor-field{display:flex;flex-direction:column;gap:5px;min-width:0;font-size:12px;color:var(--dsw-alias-label-secondary);}
 .dam-wh-editor .dam-wh-input,.dam-wh-editor .dam-wh-textarea{width:100%;min-width:0;}
+/* The surface token used by primary buttons turns dark in the Desktop dark theme. */
+.dam-wh-editor .dam-wh-btn-primary,.dam-wh-editor .dam-wh-btn-primary:hover{color:#fff;}
 .dam-wh-editor-summary,.dam-wh-editor-body{min-height:38px;height:38px;max-height:38px;overflow:hidden;resize:none;transition:height .16s ease,max-height .16s ease;}
 .dam-wh-editor-summary.dam-wh-editor--grow,.dam-wh-editor-body.dam-wh-editor--grow{height:auto;min-height:120px;max-height:320px;overflow:auto;resize:vertical;}
 .dam-wh-desc{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;margin:0;}

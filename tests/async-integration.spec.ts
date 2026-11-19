@@ -4,7 +4,7 @@ import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {Context} from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import ToolRuntime from '@deepseek-ai/dsh-tools'
+import { mountPromptTools } from './helpers/prompt-tools.ts'
 import * as plugin from '../src/index.ts'
 import {MemoryStore} from '../src/store.ts'
 import {readAudit,registerInjectionAudit} from '../src/audit-log.ts'
@@ -13,7 +13,7 @@ describe('async prompt assembly integration',()=>{
   const root=await fs.mkdtemp(join(tmpdir(),'wh-async-integration-')),ctx=new Context(),cwd=join(root,'synthetic-project')
   try {
    await ctx.plugin(SystemPrompt,{})
-   await ctx.plugin(ToolRuntime,{})
+   await mountPromptTools(ctx)
    await ctx.plugin(plugin,{maxBytes:4096,memoryDir:root,enableUserScope:true,autoSummarize:false,autoSummarizeMaxMemories:5,autoSummarizeMaxTokens:2048,minImportance:4,staleAfterDays:0})
    const store=new MemoryStore(root),agent={session:{id:'synthetic-session',header:{cwd}}}
    await store.write({name:'alpha',description:'safe synthetic',body:'synthetic fact',type:'reference',status:'verified'},'user')
@@ -45,7 +45,7 @@ describe('async prompt assembly integration',()=>{
   const cwdA=join(root,'project-a'),cwdB=join(root,'project-b')
   try {
    await ctx.plugin(SystemPrompt,{})
-   await ctx.plugin(ToolRuntime,{})
+   await mountPromptTools(ctx)
    ctx.on('system-prompt/assemble',async(_assembly,_context,next)=>{
     const result=await next()
     return {...result,variables:{...result.variables,boundary_marker:'other-listener'}}

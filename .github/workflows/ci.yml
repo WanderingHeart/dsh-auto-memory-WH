@@ -27,3 +27,7 @@ jobs:
         run: npm run build
       - name: Smoke-load the built entry
         run: node -e "import('./lib/index.js').then(m => { if (!m.apply || !m.inject) throw new Error('bad entry exports') ; console.log('entry ok:', Object.keys(m).join(', ')) })"
+      - name: Verify DSH 0.2.2-rc.4
+        run: npm run check:dsh -- 0.2.2-rc.4
+      - name: Verify DSH 0.2.2-rc.5
+        run: npm run check:dsh -- 0.2.2-rc.5

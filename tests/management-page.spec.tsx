@@ -3,13 +3,14 @@ import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryPage, type MemoryPageProps } from '../src/client/ManagementPage.tsx'
+import { en, zh } from '../src/client/locales.ts'
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let container: HTMLDivElement, root: Root
 const record = { name: 'alpha', title: 'Alpha', description: 'synthetic', body: '<script>unsafe()</script>', type: 'reference', status: 'candidate', revision: 'a'.repeat(64) }
 const listing = { records: [record], total: 1, issues: [], maxBytes: 4096, storage: { root: 'synthetic', formatVersion: 1, readOnly: false, lastBackup: null }, audit: { degraded: false, dropped: 0, pending: 0, maxBytes: 1048576, retentionDays: 7 }, consolidation: { enabled: true, idleMinutes: 60, runs: 3, lastAt: 1794000000000, lastOutcome: 'written', lastCreated: 2, lastUpdated: 0, lastSkipped: 1, totals: { written: 7, skipped: 4 } } }
 beforeEach(() => { container = document.createElement('div'); document.body.append(container); root = createRoot(container) })
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
-async function setup(failure?: string, mergeSkipped: string[] = []) {
+async function setup(failure?: string, mergeSkipped: string[] = [], dictionary: typeof zh | typeof en = zh) {
   const request = vi.fn(async (name: string, _data: unknown, _method?: string): Promise<unknown> => {
     if (name === 'sessions.active') return { sessions: [{ id: 's1', cwd: 'synthetic-project' }] }
     if (name === 'groups.list') return listing
@@ -54,7 +55,7 @@ async function setup(failure?: string, mergeSkipped: string[] = []) {
     if (name === 'memory.write' && failure) throw new Error(failure)
     return { ok: true }
   })
-  const props = { request, projectSessions: () => [{ id: 's1', cwd: 'synthetic-project' }] } as unknown as MemoryPageProps
+  const props = { request, t: (key: keyof typeof zh) => dictionary[key], projectSessions: () => [{ id: 's1', cwd: 'synthetic-project' }] } as unknown as MemoryPageProps
   await act(async () => root.render(<MemoryPage {...props} />))
   return request
 }
@@ -72,6 +73,10 @@ async function field(label: string, value: string) {
   await act(async () => { Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true })) })
 }
 describe('actual React management interactions', () => {
+  it.each([[zh, '记忆库'], [en, 'Memory Library']] as const)('renders the localized heading %#', async (dictionary, title) => {
+    await setup(undefined, [], dictionary)
+    expect(container.querySelector('h1')?.textContent).toBe(title)
+  })
   it('moves keyboard focus into the editor and restores it after discarding', async () => {
     await setup()
     const open = button('查看 / 编辑')

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { buildGraph, RELATEDNESS_WEAK, type RelatednessRecord } from '../src/relatedness.ts'
 import { hashString, projectPoint, relaxGraph, rotatePoint, seedGraph } from '../src/client/graph.ts'
 
@@ -111,5 +112,8 @@ describe('buildGraph', () => {
     const graph = buildGraph(records)
     expect(Date.now() - started).toBeLessThan(2000)
     expect(graph.nodes).toHaveLength(500)
+    // Captured before the optimization: includes ordering, tie breaks, degrees and scores.
+    expect(createHash('sha256').update(JSON.stringify(graph)).digest('hex'))
+      .toBe('68e6f26f0685b280e68707fef9c8ba3cfe81181d559065749560051ce34c79b5')
   })
 })

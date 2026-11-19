@@ -10,6 +10,8 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { promises as fsp } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import {
   MemoryStore as OriginalMemoryStore, INDEX_FILENAME, isStale, mergeLifecycleMeta, normalizeName, parseMemory, projectKey, serializeMemory, renderIndexBody as originalRenderIndexBody,
   redactSecrets, stripMemoryTags, memoryScore, descriptionSimilarity, contentFingerprint,
@@ -190,18 +192,38 @@ describe('MemoryStore CRUD 与索引', () => {
     expect(store.readIndexSync('project', CWD)).toContain('two')
   })
 
-  it('残留锁阻止写入，核验停写与锁指纹后可显式恢复', async () => {
+  it('只由支持接管的宿主自动回收已确认退出的 PID；旧宿主仍可离线恢复', async () => {
     const dir = join(root, projectKey(CWD))
     await fsp.mkdir(dir, { recursive: true })
-    // 伪造官方锁格式:内容为持有进程 pid;99999999 大概率不存在
-    await fsp.writeFile(join(dir, `${INDEX_FILENAME}.lock`), '99999999\n', { flag: 'wx' })
-    await expect(store.write({ name: 'after-orphan', description: 'd', type: 'user', body: 'x' }, 'project', CWD)).rejects.toThrow(/writer lock/)
-    expect(await fsp.readFile(join(dir, `${INDEX_FILENAME}.lock`), 'utf8')).toBe('99999999\n')
-    await releaseStaleLock({ root, lock: projectKey(CWD) + '/MEMORY.md.lock', expectedHash: sha256('99999999\n'), writersStopped: true })
-    await store.write({ name: 'after-orphan', description: 'd', type: 'user', body: 'x' }, 'project', CWD)
+    const child = spawnSync(process.execPath, ['-e', ''], { timeout: 4000 })
+    expect(child.status).toBe(0)
+    expect(child.pid).toBeGreaterThan(0)
+    expect(() => process.kill(child.pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+    const record = `${child.pid}\n`
+    const lock = join(dir, `${INDEX_FILENAME}.lock`)
+    await fsp.writeFile(lock, record, { flag: 'wx' })
+    const version = createRequire(import.meta.url)('@deepseek-ai/dsh-atomic-write/package.json').version
+    const write = () => store.write({ name: 'after-orphan', description: 'd', type: 'user', body: 'x' }, 'project', CWD)
+    if (!['0.2.2-rc.4', '0.2.2-rc.5'].includes(version)) {
+      await expect(write()).rejects.toThrow(/writer lock/)
+      expect(await fsp.readFile(lock, 'utf8')).toBe(record)
+      await releaseStaleLock({ root, lock: projectKey(CWD) + '/MEMORY.md.lock', expectedHash: sha256(record), writersStopped: true })
+    }
+    await write()
     expect(await store.read('after-orphan', 'project', CWD)).not.toBeNull()
-    // 操作完成后锁被释放
-    await expect(fsp.stat(join(dir, `${INDEX_FILENAME}.lock`))).rejects.toThrow(/ENOENT/)
+    expect((await fsp.readdir(dir)).filter(name => name.startsWith(`${INDEX_FILENAME}.lock`))).toEqual([])
+  })
+
+  it.each([['活 PID', `${process.pid}\n`], ['未知格式', 'unrecognized holder\n']])('不给%s的锁自动解锁', async (_kind, record) => {
+    const dir = join(root, projectKey(CWD))
+    await fsp.mkdir(dir, { recursive: true })
+    const lock = join(dir, `${INDEX_FILENAME}.lock`)
+    await fsp.writeFile(lock, record, { flag: 'wx' })
+    await expect(store.write({ name: 'rejected', description: 'd', type: 'user', body: 'x' }, 'project', CWD)).rejects.toThrow(/writer lock/)
+    expect(await fsp.readFile(lock, 'utf8')).toBe(record)
+    const entries = await fsp.readdir(dir)
+    expect(entries).not.toContain('rejected.md')
+    expect(entries.filter(name => name.startsWith(`${INDEX_FILENAME}.lock`))).toEqual([`${INDEX_FILENAME}.lock`])
   })
 
   it('用户级与项目级目录隔离', async () => {

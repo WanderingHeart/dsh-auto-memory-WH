@@ -13,7 +13,7 @@ DSH 内置市场读取用户配置的插件索引源，官方文档说明应用�
 
 ## 本插件申请材料
 
-- 名称：dsh-auto-memory-WH
+- 展示名：DSH Memory
 - npm：dsh-auto-memory-wh@1.0.1（发布完成后使用）
 - 源码：https://github.com/WanderingHeart/dsh-auto-memory-WH
 - 许可：MIT，保留上游来源与第三方声明。

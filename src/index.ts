@@ -244,7 +244,10 @@ export function apply(ctx: Context, input: ConfigInput): void {
       completions.status(id, status)
     })
   }
-  ctx.on('agent/created', ({ agent }) => { const cwd = effectiveProjectCwd(ctx, agent.session); if (cwd) projectSessions.set(agent.session.id, cwd) })
+  ctx.on('agent/created', ({ agent }): undefined => {
+    const cwd = effectiveProjectCwd(ctx, agent.session)
+    if (cwd) projectSessions.set(agent.session.id, cwd)
+  })
   ctx.on('session/event', (session, event) => {
     if (String(event.type) !== 'working-directory/change' || !projectSessions.has(session.id)) return
     const cwd = effectiveProjectCwd(ctx, session)
@@ -353,7 +356,7 @@ export function apply(ctx: Context, input: ConfigInput): void {
   // P1:软淘汰——每个会话首次打开时刷新一次索引,过期条目不注入。
   if (config.staleAfterDays > 0) {
     const refreshed = new Set<string>()
-    ctx.on('agent/created', ({ agent }) => {
+    ctx.on('agent/created', ({ agent }): undefined => {
       const cwd = effectiveProjectCwd(ctx, agent.session)
       if (cwd === undefined) return
       if (refreshed.has(agent.session.id)) return

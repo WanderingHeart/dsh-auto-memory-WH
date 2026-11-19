@@ -826,7 +826,7 @@ export function registerConsolidation(ctx: Context, store: MemoryStore, options:
   })
 
   // 闲置触发需要 provider/model,而会话头里没有;只能记在 agent 创建时。
-  ctx.on('agent/created', ({ agent }) => {
+  ctx.on('agent/created', ({ agent }): undefined => {
     try {
       const depth = Math.max(agent.session.header.delegationDepth ?? 0, agent.options?.subagentDepth ?? 0)
       if (depth > 0) return // 子代理不单独固化

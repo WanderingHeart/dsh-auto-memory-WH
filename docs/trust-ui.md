@@ -1,4 +1,4 @@
-# 注入、状态与管理页面（1.0.0-rc.17）
+# 注入、状态与管理页面（1.0.1）
 
 rc.10 起取消人工审核门槛。candidate 表示自动记录，verified 表示已确认，legacy 表示旧记录；三者均可按预算参与注入。disputed、superseded、带旧 disabled 标记及过期记录排除；disabled 不代表当前面板仍提供静音开关。reviewHash 是兼容元数据，不是人工批准或数字签名，不能当作现行注入门槛。
 
